@@ -38,9 +38,17 @@ export default function AuthForm({ onAuth }: { onAuth: (user: any) => void }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
+
       const data = await res.json();
+
       if (res.ok) {
-        onAuth(data.user);
+        // Logic quan trọng: Kiểm tra quyền Admin ngay tại đây
+        if (data.user.isAdmin) {
+          // Bạn có thể thông báo nhẹ hoặc chuyển hướng thẳng
+          onAuth(data.user);
+        } else {
+          onAuth(data.user);
+        }
       } else {
         alert(data.error || "Có lỗi xảy ra");
       }

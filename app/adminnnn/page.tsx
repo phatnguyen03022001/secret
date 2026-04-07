@@ -37,6 +37,7 @@ export default function AdminPage() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
+  const [isAuthorized, setIsAuthorized] = useState(false);
 
   const [userSearch, setUserSearch] = useState("");
   const [showOnlyOnline, setShowOnlyOnline] = useState(false);
@@ -50,15 +51,17 @@ export default function AdminPage() {
   useEffect(() => {
     const fetchAdmin = async () => {
       try {
-        const res = await fetch("/api/me");
-        if (res.ok) {
-          const userData = await res.json();
-          if (userData.isAdmin) setAdmin(userData);
-          // else router.push("/");
+        const res = await fetch("/api/me", { cache: "no-store" });
+        const userData = await res.json();
+
+        if (res.ok && userData.isAdmin) {
+          setAdmin(userData);
+          setIsAuthorized(true); // Chỉ bật cái này khi là Admin thật
+        } else {
+          router.replace("/");
         }
-        // else router.push("/");
-      } catch {
-        router.push("/");
+      } catch (error) {
+        router.replace("/");
       } finally {
         setLoading(false);
       }
@@ -126,12 +129,16 @@ export default function AdminPage() {
     };
   }, [admin, fetchRooms, fetchUsers]);
 
-  if (loading)
+  if (loading || !isAuthorized) {
     return (
-      <div className="flex items-center justify-center h-dvh bg-background">
-        <Loader2 className="animate-spin text-foreground w-6 h-6" />
+      <div className="flex flex-col items-center justify-center h-dvh bg-black">
+        <Loader2 className="animate-spin text-emerald-500 w-8 h-8 mb-4" />
+        <p className="text-[10px] text-emerald-500/50 font-mono tracking-[0.3em] uppercase animate-pulse">
+          Establishing Secure Link...
+        </p>
       </div>
     );
+  }
 
   return (
     <main className="flex h-dvh bg-background p-0 sm:p-4 gap-0 sm:gap-4 overflow-hidden isolate">
