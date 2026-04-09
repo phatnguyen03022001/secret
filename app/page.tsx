@@ -67,10 +67,12 @@ export default function HomePage() {
   };
 
   return (
-    <main className="h-full min-h-dvh w-full flex bg-background text-foreground overflow-hidden relative font-sans">
+    <div className="h-full w-full flex bg-background text-foreground overflow-hidden relative font-sans">
+      {" "}
       {/* 1. SIDEBAR - Soft Professional Style */}
       <aside
         className={cn(
+          // Sửa lg:w-85 thành lg:w-[340px]
           "fixed inset-y-0 left-0 z-50 w-full md:relative md:z-auto md:w-80 lg:w-85 flex flex-col bg-card/50 backdrop-blur-xl transition-all duration-500 border-r border-border",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0",
@@ -132,8 +134,9 @@ export default function HomePage() {
       {/* 2. MAIN CHAT CONTENT */}
       <section
         className={cn(
-          "flex-1 min-h-0 flex flex-col bg-background transition-all duration-500 relative", // thêm min-h-0
-          isMobile && isSidebarOpen ? "opacity-0" : "opacity-100",
+          "flex-1 min-h-0 flex flex-col bg-background transition-all duration-500 relative",
+          // Thêm pointer-events-none trên mobile khi ẩn để tránh click nhầm
+          isMobile && isSidebarOpen ? "opacity-0 pointer-events-none" : "opacity-100",
         )}>
         {/* Subtle Background pattern */}
         <div
@@ -171,6 +174,6 @@ export default function HomePage() {
           </div>
         )}
       </section>
-    </main>
+    </div>
   );
 }

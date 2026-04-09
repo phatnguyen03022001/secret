@@ -38,12 +38,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="vi" suppressHydrationWarning className="h-full">
       <body
         className={`${geistSans.variable} ${geistMono.variable} 
-        h-full min-h-dvh bg-background text-foreground antialiased 
+        h-full w-full bg-background text-foreground antialiased 
         selection:bg-primary/30 selection:text-primary 
-        overflow-x-hidden`}>
+        overflow-hidden`}>
+        {" "}
+        {/* Đổi overflow-x-hidden thành overflow-hidden */}
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <AuthProvider>
-            <main className="relative flex flex-col h-full">{children}</main>
+            {/* Sử dụng thẻ div wrapper thay vì main để tránh lồng ghép */}
+            <div className="relative flex flex-col h-dvh w-full">{children}</div>
             <Toaster position="top-center" />
           </AuthProvider>
         </ThemeProvider>

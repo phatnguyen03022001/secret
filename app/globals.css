@@ -64,27 +64,33 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
-  /* Mobile optimization */
-html, body {
-  height: 100%;
-  min-height: -webkit-fill-available; /* Quan trọng cho Safari iOS */
-  overscroll-behavior: none;
-  touch-action: pan-x pan-y;
-}
+  
+  /* Tối ưu hóa chung */
+  html, body {
+    height: 100%;
+    overscroll-behavior: none;
+  }
 
-/* Cho phép body co giãn theo nội dung nhưng chiếm toàn bộ viewport */
-body {
-  min-height: 100dvh;
-  min-height: -webkit-fill-available;
-}
+  /* Sử dụng dvh thay vì vh để tương thích tốt với thanh địa chỉ di động */
+  body {
+    min-height: 100dvh;
+  }
 
-/* Đảm bảo các container flex có thể thu gọn */
-#__next, main {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
+  /* CHỈ áp dụng hack webkit cho Safari/iOS để tránh vỡ layout trên Desktop */
+  @supports (-webkit-touch-callout: none) {
+    html, body {
+      min-height: -webkit-fill-available;
+    }
+  }
+
+  /* Đảm bảo Next.js root wrapper full height */
+  #__next {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
   input, button, select, textarea {
-    @apply text-[16px] md:text-sm; /* Chống auto-zoom trên iOS */
+    @apply text-[16px] md:text-sm;
   }
 }
