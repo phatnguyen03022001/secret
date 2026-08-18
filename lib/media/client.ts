@@ -1,12 +1,16 @@
 "use client";
 
-export interface UploadedChatMedia {
+export interface ChatMediaPayload {
   publicId: string;
   deliveryType: "upload" | "authenticated";
   format: string;
   width: number;
   height: number;
   bytes: number;
+}
+
+export interface UploadedChatMedia extends ChatMediaPayload {
+  previewUrl: string | null;
 }
 
 interface UploadSignature {
@@ -28,6 +32,17 @@ async function getUploadSignature(mode: "normal" | "once") {
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error || "Không thể chuẩn bị upload");
   return data as UploadSignature;
+}
+
+export function toMediaPayload(uploaded: UploadedChatMedia): ChatMediaPayload {
+  return {
+    publicId: uploaded.publicId,
+    deliveryType: uploaded.deliveryType,
+    format: uploaded.format,
+    width: uploaded.width,
+    height: uploaded.height,
+    bytes: uploaded.bytes,
+  };
 }
 
 export async function uploadChatImageDirect(
@@ -72,6 +87,7 @@ export async function uploadChatImageDirect(
       const width = Number(data?.width || 0);
       const height = Number(data?.height || 0);
       const bytes = Number(data?.bytes || 0);
+      const secureUrl = typeof data?.secure_url === "string" ? data.secure_url : null;
 
       if (!publicId.startsWith(`${signed.folder}/`) || !format || width <= 0 || height <= 0 || bytes <= 0) {
         reject(new Error("Cloudinary trả về metadata không hợp lệ"));
@@ -86,6 +102,7 @@ export async function uploadChatImageDirect(
         width,
         height,
         bytes,
+        previewUrl: mode === "normal" ? secureUrl : null,
       });
     };
 
