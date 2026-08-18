@@ -3,12 +3,14 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
+import { toast } from "sonner";
 import MessageItem from "./message-item";
 import ChatInput from "./chat-input";
-import { Loader2, ChevronDown, ChevronLeft, History } from "lucide-react";
+import { Clock3, Flame, Loader2, ChevronDown, ChevronLeft, History, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConversationPresence } from "@/hooks/use-presence";
 import type { ReplyPreview } from "@/lib/chat/client";
+import type { ConversationMeta } from "@/hooks/use-chat";
 
 interface ChatContainerProps {
   currentUser: {
@@ -34,6 +36,8 @@ interface ChatContainerProps {
   loading?: boolean;
   loadingMore?: boolean;
   peerTyping?: { userId: string; displayName: string } | null;
+  conversationMeta?: ConversationMeta | null;
+  setConversationMeta?: React.Dispatch<React.SetStateAction<ConversationMeta | null>>;
   onBack?: () => void;
 }
 
@@ -42,6 +46,15 @@ function formatLastSeen(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Ngoại tuyến";
   return `Hoạt động ${formatDistanceToNow(date, { addSuffix: true, locale: vi })}`;
+}
+
+function getLifecycleLabel(meta?: ConversationMeta | null) {
+  if (!meta || meta.lifecycle === "persistent") return null;
+  if (!meta.expiresAt) return meta.lifecycle === "quick" ? "Quick · 24 giờ" : "Temporary · 7 ngày";
+
+  const expiresAt = new Date(meta.expiresAt);
+  if (Number.isNaN(expiresAt.getTime())) return meta.lifecycle === "quick" ? "Quick · 24 giờ" : "Temporary · 7 ngày";
+  return `Tự xoá trong ${formatDistanceToNow(expiresAt, { locale: vi })}`;
 }
 
 export default function ChatContainer({
@@ -56,11 +69,14 @@ export default function ChatContainer({
   loading = false,
   loadingMore = false,
   peerTyping = null,
+  conversationMeta = null,
+  setConversationMeta,
   onBack,
 }: ChatContainerProps) {
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [replyTarget, setReplyTarget] = useState<ReplyPreview | null>(null);
+  const [burnBusy, setBurnBusy] = useState(false);
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
@@ -70,6 +86,8 @@ export default function ChatContainer({
   const targetDisplayName = targetUser.displayName || targetUser.username;
   const targetIsTyping = peerTyping?.userId === targetUser._id;
   const { peerOnline } = useConversationPresence(roomId, targetUser._id);
+  const lifecycleLabel = getLifecycleLabel(conversationMeta);
+  const burn = conversationMeta?.burn;
 
   const presenceLabel = targetIsTyping
     ? "đang nhập..."
@@ -79,6 +97,7 @@ export default function ChatContainer({
 
   useEffect(() => {
     setReplyTarget(null);
+    setBurnBusy(false);
   }, [roomId]);
 
   useEffect(() => {
@@ -114,6 +133,53 @@ export default function ChatContainer({
 
     markAsSeen();
   }, [lastMessageId, currentUser._id, currentUser.isAdmin, roomId, setMessages, messages]);
+
+  const updateBurnState = (requestedBy: string[]) => {
+    setConversationMeta?.((previous) =>
+      previous
+        ? {
+            ...previous,
+            burn: {
+              requestedBy,
+              requestedByMe: requestedBy.includes(currentUser._id),
+              requestedByPeer: requestedBy.some((id) => id !== currentUser._id),
+            },
+          }
+        : previous,
+    );
+  };
+
+  const requestBurn = async () => {
+    if (burnBusy || currentUser.isAdmin) return;
+    setBurnBusy(true);
+
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/burn`, { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể gửi yêu cầu burn");
+      if (!data?.burned) updateBurnState(data?.requestedBy || []);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể gửi yêu cầu burn");
+    } finally {
+      setBurnBusy(false);
+    }
+  };
+
+  const cancelBurn = async () => {
+    if (burnBusy || currentUser.isAdmin) return;
+    setBurnBusy(true);
+
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/burn`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể huỷ yêu cầu burn");
+      updateBurnState(data?.requestedBy || []);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể huỷ yêu cầu burn");
+    } finally {
+      setBurnBusy(false);
+    }
+  };
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     if (!scrollViewportRef.current) return;
@@ -164,7 +230,7 @@ export default function ChatContainer({
 
   return (
     <div className="flex flex-col h-full bg-background relative">
-      <header className="h-14 md:h-16 shrink-0 px-4 flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-30">
+      <header className="h-14 md:h-16 shrink-0 px-4 flex items-center justify-between gap-3 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-30">
         <div className="flex items-center gap-3 min-w-0">
           {onBack && (
             <Button variant="ghost" size="icon" onClick={onBack} className="md:hidden -ml-2 h-9 w-9">
@@ -189,7 +255,62 @@ export default function ChatContainer({
             </p>
           </div>
         </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {lifecycleLabel && (
+            <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground">
+              <Clock3 className="h-3 w-3" />
+              {lifecycleLabel}
+            </span>
+          )}
+          {!readOnly && !currentUser.isAdmin && !burn?.requestedByPeer && !burn?.requestedByMe && (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={burnBusy}
+              onClick={requestBurn}
+              aria-label="Đề nghị burn conversation"
+              title="Đề nghị xoá vĩnh viễn conversation"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+              {burnBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flame className="h-4 w-4" />}
+            </Button>
+          )}
+        </div>
       </header>
+
+      {lifecycleLabel && (
+        <div className="sm:hidden px-4 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground flex items-center gap-1.5">
+          <Clock3 className="h-3 w-3" />
+          {lifecycleLabel}
+        </div>
+      )}
+
+      {burn?.requestedByPeer && !burn.requestedByMe && !currentUser.isAdmin && (
+        <div className="px-4 py-3 border-b border-destructive/20 bg-destructive/5 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold">{targetDisplayName} đề nghị burn conversation</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              Đồng ý sẽ xoá vĩnh viễn conversation, message và media của cuộc chat này.
+            </p>
+          </div>
+          <Button size="sm" variant="destructive" disabled={burnBusy} onClick={requestBurn} className="h-8 text-xs gap-1.5">
+            {burnBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Flame className="h-3.5 w-3.5" />}
+            Đồng ý xoá
+          </Button>
+        </div>
+      )}
+
+      {burn?.requestedByMe && !burn.requestedByPeer && !currentUser.isAdmin && (
+        <div className="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium">Đang chờ {targetDisplayName} đồng ý burn.</p>
+          </div>
+          <Button variant="ghost" size="sm" disabled={burnBusy} onClick={cancelBurn} className="h-7 text-xs gap-1">
+            {burnBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+            Huỷ yêu cầu
+          </Button>
+        </div>
+      )}
 
       <div
         ref={scrollViewportRef}
