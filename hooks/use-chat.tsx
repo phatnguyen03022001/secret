@@ -9,6 +9,16 @@ interface PeerTypingState {
   displayName: string;
 }
 
+export interface ConversationMeta {
+  lifecycle: "persistent" | "quick" | "temporary";
+  expiresAt: string | null;
+  burn: {
+    requestedBy: string[];
+    requestedByMe: boolean;
+    requestedByPeer: boolean;
+  };
+}
+
 export function useChat(currentUser: any, roomId: string) {
   const userId = currentUser?._id ?? null;
   const isAdmin = currentUser?.isAdmin ?? false;
@@ -19,6 +29,8 @@ export function useChat(currentUser: any, roomId: string) {
   const [hasMore, setHasMore] = useState(true);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState<PeerTypingState | null>(null);
+  const [conversationMeta, setConversationMeta] = useState<ConversationMeta | null>(null);
+  const [conversationRemoved, setConversationRemoved] = useState(false);
 
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
@@ -32,6 +44,23 @@ export function useChat(currentUser: any, roomId: string) {
   useEffect(() => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
+
+  const loadConversationMeta = useCallback(async () => {
+    if (!userId || !roomId) return;
+
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      setConversationMeta({
+        lifecycle: data.lifecycle || "persistent",
+        expiresAt: data.expiresAt || null,
+        burn: data.burn || { requestedBy: [], requestedByMe: false, requestedByPeer: false },
+      });
+    } catch {
+      // Message loading remains usable even if metadata refresh fails.
+    }
+  }, [roomId, userId]);
 
   const loadMessages = useCallback(
     async (cursor?: string | null, isLoadMore = false) => {
@@ -73,10 +102,12 @@ export function useChat(currentUser: any, roomId: string) {
     if (!roomId || !userId) return;
     setMessages([]);
     setPeerTyping(null);
+    setConversationMeta(null);
+    setConversationRemoved(false);
     setHasMore(true);
     setNextCursor(null);
-    loadMessages();
-  }, [roomId, userId, loadMessages]);
+    void Promise.all([loadMessages(), loadConversationMeta()]);
+  }, [roomId, userId, loadMessages, loadConversationMeta]);
 
   useEffect(() => {
     if (!roomId || !userId) return;
@@ -191,12 +222,38 @@ export function useChat(currentUser: any, roomId: string) {
       }, 3500);
     };
 
+    const handleBurnStatus = (data: { conversationId: string; requestedBy: string[] }) => {
+      if (data.conversationId !== roomId) return;
+      const requestedBy = data.requestedBy || [];
+      setConversationMeta((previous) =>
+        previous
+          ? {
+              ...previous,
+              burn: {
+                requestedBy,
+                requestedByMe: requestedBy.includes(userId),
+                requestedByPeer: requestedBy.some((id) => id !== userId),
+              },
+            }
+          : previous,
+      );
+    };
+
+    const handleConversationRemoved = (data: { conversationId: string }) => {
+      if (data.conversationId !== roomId) return;
+      setConversationRemoved(true);
+      setMessages([]);
+      setPeerTyping(null);
+    };
+
     channel.bind("new-message", handleNewMessage);
     channel.bind("message-deleted", handleMessageDeleted);
     channel.bind("message-updated", handleMessageUpdated);
     channel.bind("messages-seen", handleMessagesSeen);
     channel.bind("message-reactions", handleReactions);
     channel.bind("typing-changed", handleTypingChanged);
+    channel.bind("burn-status", handleBurnStatus);
+    channel.bind("conversation-removed", handleConversationRemoved);
 
     return () => {
       if (typingExpiryRef.current) clearTimeout(typingExpiryRef.current);
@@ -217,7 +274,11 @@ export function useChat(currentUser: any, roomId: string) {
     loadingMore,
     hasMore,
     peerTyping,
+    conversationMeta,
+    conversationRemoved,
     loadMoreOlder,
+    loadConversationMeta,
+    setConversationMeta,
     setMessages,
   };
 }
