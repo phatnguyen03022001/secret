@@ -46,7 +46,7 @@ export default function HomePage() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [targetUser, setTargetUser] = useState<ChatTarget | null>(null);
 
-  const { messages, loading, loadingMore, loadMoreOlder, hasMore, setMessages } = useChat(
+  const { messages, loading, loadingMore, loadMoreOlder, hasMore, peerTyping, setMessages } = useChat(
     user,
     selectedRoomId || "",
   );
@@ -191,6 +191,7 @@ export default function HomePage() {
               hasMore={hasMore}
               loading={loading}
               loadingMore={loadingMore}
+              peerTyping={peerTyping}
               onBack={handleBackToList}
             />
           </div>
