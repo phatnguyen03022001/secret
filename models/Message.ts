@@ -1,5 +1,14 @@
 import mongoose, { Schema, model, models } from "mongoose";
 
+const ReactionSchema = new Schema(
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    emoji: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const MessageSchema = new Schema(
   {
     roomId: { type: String, required: true, index: true },
@@ -13,6 +22,7 @@ const MessageSchema = new Schema(
     imageMode: { type: String, enum: ["normal", "once"], default: "normal" },
     onceViewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    reactions: { type: [ReactionSchema], default: [] },
     deleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     seenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
