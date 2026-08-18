@@ -58,16 +58,6 @@ function requireCloudinaryConfig() {
   };
 }
 
-export const uploadImageToCloudinary = (file: Buffer) =>
-  new Promise<string>((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream({ folder: "chat_images" }, (err, result) => {
-      if (err) reject(err);
-      else resolve(result!.secure_url);
-    });
-
-    stream.end(file);
-  });
-
 export function createCloudinaryUploadSignature(userId: string, deliveryType: "upload" | "authenticated") {
   const { cloudName, apiKey, apiSecret } = requireCloudinaryConfig();
   const timestamp = Math.floor(Date.now() / 1000);
@@ -85,6 +75,29 @@ export function createCloudinaryUploadSignature(userId: string, deliveryType: "u
     deliveryType,
     uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/${deliveryType}`,
   };
+}
+
+export async function getCloudinaryImageMetadata(
+  publicId: string,
+  deliveryType: "upload" | "authenticated",
+) {
+  requireCloudinaryConfig();
+
+  const resource = await cloudinary.api.resource(publicId, {
+    resource_type: "image",
+    type: deliveryType,
+  });
+
+  const format = typeof resource?.format === "string" ? resource.format.toLowerCase() : "";
+  const width = Number(resource?.width || 0);
+  const height = Number(resource?.height || 0);
+  const bytes = Number(resource?.bytes || 0);
+
+  if (!format || width <= 0 || height <= 0 || bytes <= 0) {
+    throw new Error("Cloudinary media metadata is invalid");
+  }
+
+  return { format, width, height, bytes };
 }
 
 export function getCloudinaryPublicImageUrl(publicId: string, format: string) {
