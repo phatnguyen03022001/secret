@@ -9,6 +9,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (currentUser.accountType === "guest") {
+    return NextResponse.json({ error: "Guest sessions cannot browse users" }, { status: 403 });
+  }
+
   await connectDB();
 
   const keyword = (req.nextUrl.searchParams.get("q") || "").trim();
@@ -20,10 +24,15 @@ export async function GET(req: NextRequest) {
   const users = await User.find({
     _id: { $ne: currentUser._id },
     isAdmin: false,
-    $or: [{ username: { $regex: `^${escaped}$`, $options: "i" } }, ...(maybeId ? [{ _id: maybeId }] : [])],
+    accountType: { $ne: "guest" },
+    $or: [
+      { username: { $regex: `^${escaped}$`, $options: "i" } },
+      { displayName: { $regex: `^${escaped}$`, $options: "i" } },
+      ...(maybeId ? [{ _id: maybeId }] : []),
+    ],
   })
     .limit(10)
-    .select("username _id");
+    .select("username displayName accountType _id");
 
   return NextResponse.json(users);
 }
