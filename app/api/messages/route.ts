@@ -12,6 +12,7 @@ import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import Conversation from "@/models/Conversation";
+import MediaUpload from "@/models/MediaUpload";
 import Message from "@/models/Message";
 import User from "@/models/User";
 import mongoose from "mongoose";
@@ -252,6 +253,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Tin nhắn tối đa 160 ký tự" }, { status: 400 });
   }
 
+  if (clientMessageId) {
+    const duplicate = await Message.findOne({ conversationId: conversation._id, userId: user._id, clientMessageId });
+    if (duplicate) {
+      const duplicateReplyPreview = await getReplyPreviewForMessage(duplicate);
+      return NextResponse.json(sanitizeMessageForRealtime(duplicate, duplicateReplyPreview), { status: 200 });
+    }
+  }
+
   let imageUrl: string | null = null;
   let persistedMedia: typeof media = null;
 
@@ -266,6 +275,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Media delivery mode không hợp lệ" }, { status: 400 });
     }
 
+    const pendingUpload = await MediaUpload.exists({
+      userId: user._id,
+      publicId: media.publicId,
+      deliveryType: media.deliveryType,
+      cleanupAfter: { $gt: new Date() },
+    });
+    if (!pendingUpload) {
+      return NextResponse.json({ error: "Media upload không còn hợp lệ" }, { status: 400 });
+    }
+
     persistedMedia = media;
     imageUrl = imageMode === "normal" ? getCloudinaryPublicImageUrl(media.publicId, media.format) : null;
   } else if (legacyImageUrl) {
@@ -276,14 +295,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Ảnh xem một lần cần protected upload" }, { status: 400 });
     }
     imageUrl = legacyImageUrl;
-  }
-
-  if (clientMessageId) {
-    const duplicate = await Message.findOne({ conversationId: conversation._id, userId: user._id, clientMessageId });
-    if (duplicate) {
-      const duplicateReplyPreview = await getReplyPreviewForMessage(duplicate);
-      return NextResponse.json(sanitizeMessageForRealtime(duplicate, duplicateReplyPreview), { status: 200 });
-    }
   }
 
   const roomIds = getConversationMessageRoomIds(conversation);
