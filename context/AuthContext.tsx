@@ -22,6 +22,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+async function getApiError(response: Response, fallback: string) {
+  const data = await response.json().catch(() => null);
+  return data?.error || fallback;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,13 +45,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string, isAdmin = false) => {
     const endpoint = isAdmin ? "/api/admin/login" : "/api/login";
-    const res = await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    if (!res.ok) throw new Error(await res.text());
-    const { user } = await res.json();
+
+    if (!response.ok) {
+      throw new Error(await getApiError(response, "Đăng nhập thất bại"));
+    }
+
+    const { user } = await response.json();
     setUser(user);
     router.push(user.isAdmin ? "/admin-secret-route" : "/");
   };
@@ -58,12 +67,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const register = async (username: string, password: string, confirmPassword: string) => {
-    const res = await fetch("/api/register", {
+    const response = await fetch("/api/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password, confirmPassword }),
     });
-    if (!res.ok) throw new Error(await res.text());
+
+    if (!response.ok) {
+      throw new Error(await getApiError(response, "Tạo tài khoản thất bại"));
+    }
+
     await login(username, password, false);
   };
 
