@@ -1,28 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, pusherServer } from "@/lib/server"; // 👈 thêm pusherServer
+import { connectDB, pusherServer } from "@/lib/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import User from "@/models/User";
-import { cookies } from "next/headers";
 
 export async function POST(req: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get("auth_session");
-
-    if (!sessionCookie?.value) {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userId = sessionCookie.value;
-
     await connectDB();
-
-    const user = await User.findByIdAndUpdate(userId, { lastActive: new Date() }, { new: true, runValidators: false });
+    const user = await User.findByIdAndUpdate(
+      currentUser._id,
+      { lastActive: new Date() },
+      { new: true, runValidators: false },
+    );
 
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // ✅ Gửi sự kiện realtime cho admin
     await pusherServer.trigger("admin-global", "user-online", {
       userId: user._id.toString(),
       username: user.username,

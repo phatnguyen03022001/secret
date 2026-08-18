@@ -1,59 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, pusherServer } from "@/lib/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import Message from "@/models/Message";
-import User from "@/models/User";
-import { cookies } from "next/headers";
 import { isUserInRoom } from "@/lib/utils";
 
 export async function POST(req: NextRequest) {
   await connectDB();
-  const cookieStore = await cookies();
-  const userId = cookieStore.get("auth_session")?.value;
-  if (!userId) {
+
+  const user = await getCurrentUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body;
+  let body: unknown;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { roomId } = body;
-  if (!roomId || typeof roomId !== "string") {
+  const roomId = typeof (body as { roomId?: unknown })?.roomId === "string" ? (body as { roomId: string }).roomId : null;
+  if (!roomId) {
     return NextResponse.json({ error: "Thiếu hoặc sai roomId" }, { status: 400 });
   }
 
-  // Kiểm tra user có phải participant không (dùng helper)
-  if (!isUserInRoom(roomId, userId)) {
+  const userId = user._id.toString();
+  if (!user.isAdmin && !isUserInRoom(roomId, userId)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Kiểm tra xem user có phải admin không
-  const user = await User.findById(userId).select("isAdmin").lean();
-  const isAdmin = user?.isAdmin || false;
-
-  // Cập nhật seenBy cho tin nhắn của người khác
   const result = await Message.updateMany(
     {
       roomId,
-      seenBy: { $ne: userId },
-      userId: { $ne: userId },
+      seenBy: { $ne: user._id },
+      userId: { $ne: user._id },
     },
-    { $addToSet: { seenBy: userId } },
+    { $addToSet: { seenBy: user._id } },
   );
 
-  // Chỉ trigger Pusher nếu có ít nhất một tin nhắn được cập nhật VÀ user không phải admin
-  // Nếu user không phải admin, sau khi seen thành công, trigger event cập nhật unread
-  if (result.modifiedCount > 0 && !isAdmin) {
-    await pusherServer.trigger(`chat-${roomId}`, "messages-seen", { roomId, userId });
-
-    // ✅ Gửi thêm event riêng cho user này để cập nhật unreadCount = 0
-    await pusherServer.trigger(`user-${userId}`, "unread-updated", {
-      roomId,
-      unreadCount: 0,
-    });
+  if (result.modifiedCount > 0 && !user.isAdmin) {
+    await Promise.all([
+      pusherServer.trigger(`chat-${roomId}`, "messages-seen", { roomId, userId, isAdmin: false }),
+      pusherServer.trigger(`user-${userId}`, "unread-updated", {
+        roomId,
+        unreadCount: 0,
+      }),
+    ]);
   }
 
   return NextResponse.json({ modified: result.modifiedCount });

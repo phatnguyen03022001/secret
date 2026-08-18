@@ -1,27 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadImageToCloudinary } from "@/lib/server";
-import { cookies } from "next/headers";
-import User from "@/models/User";
-import { connectDB } from "@/lib/server";
+import { getCurrentUser } from "@/lib/auth/session";
+
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 export async function POST(req: NextRequest) {
-  // Xác thực người dùng
-  const cookieStore = await cookies();
-  const userId = cookieStore.get("auth_session")?.value;
-  if (!userId) {
+  const user = await getCurrentUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await connectDB();
-  const user = await User.findById(userId);
-  if (!user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  const formData = await req.formData();
+  const file = formData.get("file");
+
+  if (!(file instanceof File)) {
+    return NextResponse.json({ error: "No file" }, { status: 400 });
   }
 
-  const formData = await req.formData();
-  const file = formData.get("file") as File;
+  if (!ALLOWED_TYPES.has(file.type)) {
+    return NextResponse.json({ error: "Unsupported image type" }, { status: 415 });
+  }
 
-  if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
+  if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES) {
+    return NextResponse.json({ error: "Image must be between 1 byte and 8 MB" }, { status: 413 });
+  }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const imageUrl = await uploadImageToCloudinary(buffer);

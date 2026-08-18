@@ -1,43 +1,39 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
+import { createSession } from "@/lib/auth/session";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
-import { cookies } from "next/headers";
+import { z } from "zod";
+
+const loginSchema = z.object({
+  username: z.string().trim().min(1).max(50),
+  password: z.string().min(1).max(200),
+});
 
 export async function POST(req: Request) {
   await connectDB();
 
-  let body;
+  let body: unknown;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const username = body.username?.trim().toLowerCase();
-  const password = body.password;
-
-  if (!username || !password) {
-    return NextResponse.json({ error: "Thiếu thông tin đăng nhập" }, { status: 400 });
+  const parsed = loginSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid credentials" }, { status: 400 });
   }
 
-  const user = await User.findOne({ username });
-  if (!user) {
+  const username = parsed.data.username.toLowerCase();
+  const user = await User.findOne({ username, isAdmin: false });
+
+  if (!user || !(await bcrypt.compare(parsed.data.password, user.password))) {
     return NextResponse.json({ error: "Sai tên đăng nhập hoặc mật khẩu" }, { status: 401 });
   }
 
-  const isValid = await bcrypt.compare(password, user.password);
-  if (!isValid) {
-    return NextResponse.json({ error: "Sai tên đăng nhập hoặc mật khẩu" }, { status: 401 });
-  }
-
-  const cookieStore = await cookies();
-  cookieStore.set("auth_session", user._id.toString(), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
+  await createSession(user._id.toString(), {
+    userAgent: req.headers.get("user-agent"),
   });
 
   return NextResponse.json({

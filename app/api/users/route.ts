@@ -1,24 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import User from "@/models/User";
-import { cookies } from "next/headers";
 
 export async function GET(req: NextRequest) {
   await connectDB();
-  const cookieStore = await cookies();
-  const userId = cookieStore.get("auth_session")?.value;
-  if (!userId) {
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const currentUser = await User.findById(userId);
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!currentUser.isAdmin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Phân trang
-  const page = parseInt(req.nextUrl.searchParams.get("page") || "1");
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "20"), 50);
+  const page = Math.max(parseInt(req.nextUrl.searchParams.get("page") || "1", 10), 1);
+  const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") || "20", 10), 1), 50);
   const skip = (page - 1) * limit;
 
   const totalUsers = await User.countDocuments({});

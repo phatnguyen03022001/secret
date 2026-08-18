@@ -1,38 +1,48 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
+import { createSession } from "@/lib/auth/session";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
-import { cookies } from "next/headers";
+import { z } from "zod";
 
-// app/api/admin/login/route.ts
+const adminLoginSchema = z.object({
+  username: z.string().trim().min(1).max(50),
+  password: z.string().min(1).max(200),
+});
+
 export async function POST(req: Request) {
   await connectDB();
-  const { username, password } = await req.json();
 
-  const user = await User.findOne({ username }); // Không lọc isAdmin ở đây nữa
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-  if (!user) {
+  const parsed = adminLoginSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Thông tin không chính xác" }, { status: 400 });
+  }
+
+  const username = parsed.data.username.toLowerCase();
+  const user = await User.findOne({ username, isAdmin: true });
+
+  if (!user || !(await bcrypt.compare(parsed.data.password, user.password))) {
     return NextResponse.json({ error: "Thông tin không chính xác" }, { status: 401 });
   }
 
-  const isValid = await bcrypt.compare(password, user.password);
-  if (!isValid) {
-    return NextResponse.json({ error: "Thông tin không chính xác" }, { status: 401 });
-  }
-
-  const cookieStore = await cookies();
-  // Vẫn cấp cookie auth_session bình thường
-  cookieStore.set("auth_session", user._id.toString(), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 60 * 60 * 4,
+  await createSession(user._id.toString(), {
+    maxAgeSeconds: 60 * 60 * 4,
+    userAgent: req.headers.get("user-agent"),
   });
 
-  // Trả về thông tin user để Frontend biết quyền
   return NextResponse.json({
     success: true,
-    user: { username: user.username, isAdmin: user.isAdmin },
+    user: {
+      _id: user._id,
+      username: user.username,
+      isAdmin: user.isAdmin,
+    },
   });
 }

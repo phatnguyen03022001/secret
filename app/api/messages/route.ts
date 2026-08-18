@@ -1,65 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, pusherServer } from "@/lib/server";
+import { getCurrentUser } from "@/lib/auth/session";
 import User from "@/models/User";
 import Message from "@/models/Message";
-import { cookies } from "next/headers";
 import mongoose from "mongoose";
+import { z } from "zod";
 import { getParticipantsFromRoomId } from "@/lib/utils";
 
-/* =========================
-   GET MESSAGES
-========================= */
+const sendMessageSchema = z.object({
+  text: z.string().max(4000).optional().default(""),
+  roomId: z.string().min(1).max(200).optional(),
+  imageUrl: z.string().url().nullable().optional(),
+  imageMode: z.enum(["normal", "once"]).optional().default("normal"),
+});
+
 export async function GET(req: NextRequest) {
   await connectDB();
 
-  const cookieStore = await cookies();
-  const userId = cookieStore.get("auth_session")?.value;
-  if (!userId) {
+  const viewer = await getCurrentUser();
+  if (!viewer) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const viewer = await User.findById(userId).lean();
-  if (!viewer) {
-    return NextResponse.json({ error: "User không tồn tại" }, { status: 404 });
-  }
-
+  const viewerId = viewer._id.toString();
   const roomId = req.nextUrl.searchParams.get("roomId");
   const cursor = req.nextUrl.searchParams.get("cursor");
-  const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "10", 10), 50);
+  const rawLimit = parseInt(req.nextUrl.searchParams.get("limit") || "10", 10);
+  const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 10, 1), 50);
 
   if (!roomId) {
     return NextResponse.json({ error: "Thiếu roomId" }, { status: 400 });
   }
 
   const participants = getParticipantsFromRoomId(roomId);
-  const isOwnerRoom = roomId === `room-${viewer._id}`;
-  const isPrivateRoom = participants.includes(viewer._id.toString());
+  const isOwnerRoom = roomId === `room-${viewerId}`;
+  const isPrivateRoom = participants.includes(viewerId);
 
   if (!viewer.isAdmin && !isOwnerRoom && !isPrivateRoom) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const queryFilter: Record<string, unknown> = { roomId };
-
   if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
     queryFilter._id = { $lt: new mongoose.Types.ObjectId(cursor) };
   }
 
   const messages = await Message.find(queryFilter).sort({ createdAt: -1 }).limit(limit).lean().exec();
 
-  const processed = messages.map((m: any) => {
-    const obj = { ...m };
-
-    if (obj.deleted) {
-      if (viewer.isAdmin) obj.isDeleted = true;
-      else {
-        obj.text = "[Tin nhắn đã bị gỡ]";
-        obj.imageUrl = null;
-        obj.isDeleted = true;
+  const processed = messages.map((message: any) => {
+    const item = { ...message };
+    if (item.deleted) {
+      item.isDeleted = true;
+      if (!viewer.isAdmin) {
+        item.text = "[Tin nhắn đã bị gỡ]";
+        item.imageUrl = null;
       }
     }
-    // Không còn ẩn admin → giữ nguyên username, userId
-    return obj;
+    return item;
   });
 
   const hasMore = messages.length === limit;
@@ -72,59 +69,50 @@ export async function GET(req: NextRequest) {
   });
 }
 
-/* =========================
-   POST MESSAGE
-========================= */
 export async function POST(req: NextRequest) {
   await connectDB();
 
-  const cookieStore = await cookies();
-  const userIdFromCookie = cookieStore.get("auth_session")?.value;
-
-  if (!userIdFromCookie) {
+  const user = await getCurrentUser();
+  if (!user) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
-  const user = await User.findById(userIdFromCookie).lean();
-  if (!user) {
-    return NextResponse.json({ error: "User không tồn tại" }, { status: 404 });
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { text, roomId, imageUrl, imageMode } = await req.json();
+  const parsed = sendMessageSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  }
+
+  const userId = user._id.toString();
+  const text = parsed.data.text.trim();
+  const imageUrl = parsed.data.imageUrl ?? null;
 
   if (!text && !imageUrl) {
     return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
   }
 
-  if (!user.isAdmin && text?.trim().length > 160) {
+  if (!user.isAdmin && text.length > 160) {
     return NextResponse.json({ error: "Tin nhắn tối đa 160 ký tự" }, { status: 400 });
   }
 
-  const finalRoomId = roomId || `room-${user._id}`;
-
+  const finalRoomId = parsed.data.roomId || `room-${userId}`;
   const participants = getParticipantsFromRoomId(finalRoomId);
-  const isOwnerRoom = finalRoomId === `room-${user._id}`;
-  const isPrivateRoom = participants.includes(user._id.toString());
+  const isOwnerRoom = finalRoomId === `room-${userId}`;
+  const isPrivateRoom = participants.includes(userId);
 
   if (!user.isAdmin && !isOwnerRoom && !isPrivateRoom) {
     return NextResponse.json({ error: "Không có quyền gửi vào phòng này" }, { status: 403 });
   }
 
-  // Kiểm tra: admin không được gửi tin vào phòng có user thường
   if (user.isAdmin) {
-    const hasNonAdmin = participants.some(async (pid) => {
-      const p = await User.findById(pid).lean();
-      return p && !p.isAdmin;
-    });
-    // Vì hasNonAdmin là Promise, cần await. Cách đúng:
-    const nonAdminExists = await Promise.all(
-      participants.map(async (pid) => {
-        const p = await User.findById(pid).lean();
-        return p && !p.isAdmin;
-      }),
-    ).then((results) => results.some(Boolean));
-
-    if (nonAdminExists) {
+    const participantsInfo = await User.find({ _id: { $in: participants } }).select("isAdmin").lean();
+    if (participantsInfo.some((participant) => !participant.isAdmin)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }
@@ -134,37 +122,31 @@ export async function POST(req: NextRequest) {
     userId: user._id,
     username: user.username,
     isAdmin: user.isAdmin || false,
-    text: text || "",
+    text,
     imageUrl,
-    imageMode: imageMode === "once" ? "once" : "normal",
+    imageMode: imageUrl && parsed.data.imageMode === "once" ? "once" : "normal",
   });
 
   const msgObj = msg.toObject();
-
-  // Realtime: gửi tin nhắn đến phòng chat
   await pusherServer.trigger(`chat-${finalRoomId}`, "new-message", msgObj);
 
-  // Cập nhật danh sách phòng cho từng participant
   const otherUserForUpdate = { _id: user._id, username: user.username };
-
-  const userUpdates = participants.map((pid: string) =>
-    pusherServer.trigger(`user-${pid}`, "rooms-updated", {
+  const userUpdates = participants.map((participantId: string) =>
+    pusherServer.trigger(`user-${participantId}`, "rooms-updated", {
       roomId: finalRoomId,
       lastMessage: msgObj,
       otherUser: otherUserForUpdate,
     }),
   );
 
-  // Admin dashboard: chỉ trigger nếu phòng không có admin nào
   const adminParticipants = await User.find({
     _id: { $in: participants },
     isAdmin: true,
   })
     .select("_id")
     .lean();
-  const hasAdminInRoom = adminParticipants.length > 0;
 
-  const adminUpdate = hasAdminInRoom
+  const adminUpdate = adminParticipants.length
     ? Promise.resolve()
     : pusherServer.trigger("admin-global", "rooms-updated", {
         roomId: finalRoomId,

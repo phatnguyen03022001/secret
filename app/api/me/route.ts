@@ -1,33 +1,20 @@
-// app/api/me/route.ts
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/server";
-import User from "@/models/User";
+import { getCurrentUser } from "@/lib/auth/session";
 
 export async function GET() {
   try {
-    await connectDB();
-    const cookieStore = await cookies();
+    const user = await getCurrentUser();
 
-    // Check for both regular auth_session cookies
-    const userId = cookieStore.get("auth_session")?.value;
-
-    if (!userId) {
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await User.findById(userId).select("-password");
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    // Quan trọng: Phải trả về isAdmin ở đây
     return NextResponse.json({
       _id: user._id,
       username: user.username,
       isAdmin: user.isAdmin,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: "Server Error" }, { status: 500 });
   }
 }
