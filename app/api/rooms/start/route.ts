@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { ensureDirectConversation } from "@/lib/chat/conversations";
 import User from "@/models/User";
-import { getPrivateRoomId } from "@/lib/utils";
 import mongoose from "mongoose";
 import { z } from "zod";
 
@@ -48,10 +48,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const roomId = getPrivateRoomId(userId, targetUserId);
+  const conversation = await ensureDirectConversation(currentUser, targetUser);
+  const conversationId = conversation._id.toString();
 
   return NextResponse.json({
-    roomId,
+    roomId: conversationId,
+    conversationId,
     targetUser: {
       _id: targetUser._id,
       username: targetUser.username,
