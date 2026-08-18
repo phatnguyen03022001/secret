@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, pusherServer } from "@/lib/server";
+import { connectDB, getCloudinaryPublicImageUrl, pusherServer } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import {
   getConversationMemberIds,
@@ -17,10 +17,20 @@ import User from "@/models/User";
 import mongoose from "mongoose";
 import { z } from "zod";
 
+const mediaSchema = z.object({
+  publicId: z.string().min(10).max(300),
+  deliveryType: z.enum(["upload", "authenticated"]),
+  format: z.enum(["jpg", "jpeg", "png", "webp", "gif"]),
+  width: z.number().int().min(1).max(12000),
+  height: z.number().int().min(1).max(12000),
+  bytes: z.number().int().min(1).max(8 * 1024 * 1024),
+});
+
 const sendMessageSchema = z.object({
   text: z.string().max(4000).optional().default(""),
   roomId: z.string().min(1).max(200),
   imageUrl: z.string().url().nullable().optional(),
+  media: mediaSchema.nullable().optional(),
   imageMode: z.enum(["normal", "once"]).optional().default("normal"),
   clientMessageId: z.string().min(8).max(120).optional(),
   replyToId: z
@@ -47,7 +57,7 @@ function buildReplyPreview(message: any) {
     return { ...base, type: "image", content: "Ảnh xem một lần" };
   }
 
-  if (message.imageUrl) {
+  if (message.imageUrl || message.media?.publicId) {
     return { ...base, type: "image", content: message.text?.trim() || "Ảnh" };
   }
 
@@ -58,9 +68,22 @@ function buildReplyPreview(message: any) {
   };
 }
 
+function sanitizeMediaForClient(media: any, exposePublicId = false) {
+  if (!media) return null;
+  return {
+    ...(exposePublicId ? { publicId: media.publicId } : {}),
+    deliveryType: media.deliveryType,
+    format: media.format,
+    width: media.width,
+    height: media.height,
+    bytes: media.bytes,
+  };
+}
+
 function sanitizeMessageForRealtime(message: any, replyPreview?: ReturnType<typeof buildReplyPreview>) {
   const payload = typeof message.toObject === "function" ? message.toObject() : { ...message };
   delete payload.editHistory;
+  if (payload.media) payload.media = sanitizeMediaForClient(payload.media, false);
   if (payload.imageMode === "once") {
     payload.imageUrl = null;
     payload.onceAvailable = true;
@@ -72,7 +95,7 @@ function sanitizeMessageForRealtime(message: any, replyPreview?: ReturnType<type
 async function getReplyPreviewForMessage(message: any) {
   if (!message?.replyTo) return null;
   const replyTarget = await Message.findById(message.replyTo)
-    .select("_id userId username text imageUrl imageMode deleted")
+    .select("_id userId username text imageUrl media imageMode deleted")
     .lean();
   return buildReplyPreview(replyTarget);
 }
@@ -118,7 +141,7 @@ export async function GET(req: NextRequest) {
   ];
   const replyTargets = replyIds.length
     ? await Message.find({ _id: { $in: replyIds } })
-        .select("_id userId username text imageUrl imageMode deleted")
+        .select("_id userId username text imageUrl media imageMode deleted")
         .lean()
     : [];
   const replyMap = new Map(replyTargets.map((message: any) => [message._id.toString(), message]));
@@ -128,7 +151,10 @@ export async function GET(req: NextRequest) {
     const item = { ...message };
     const isSender = item.userId?.toString() === viewerId;
 
-    if (!viewer.isAdmin) delete item.editHistory;
+    if (!viewer.isAdmin) {
+      delete item.editHistory;
+      if (item.media) item.media = sanitizeMediaForClient(item.media, false);
+    }
 
     if (item.replyTo) {
       item.replyPreview = buildReplyPreview(replyMap.get(item.replyTo.toString()));
@@ -209,19 +235,47 @@ export async function POST(req: NextRequest) {
   }
 
   const text = parsed.data.text.trim();
-  const imageUrl = parsed.data.imageUrl ?? null;
+  const legacyImageUrl = parsed.data.imageUrl ?? null;
+  const media = parsed.data.media ?? null;
   const clientMessageId = parsed.data.clientMessageId;
+  const imageMode = parsed.data.imageMode;
 
-  if (!text && !imageUrl) {
-    return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
+  if (legacyImageUrl && media) {
+    return NextResponse.json({ error: "Media payload không hợp lệ" }, { status: 400 });
   }
 
-  if (imageUrl && !isManagedCloudinaryImageUrl(imageUrl)) {
-    return NextResponse.json({ error: "Media URL không thuộc Spackie" }, { status: 400 });
+  if (!text && !legacyImageUrl && !media) {
+    return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
   }
 
   if (!user.isAdmin && text.length > 160) {
     return NextResponse.json({ error: "Tin nhắn tối đa 160 ký tự" }, { status: 400 });
+  }
+
+  let imageUrl: string | null = null;
+  let persistedMedia: typeof media = null;
+
+  if (media) {
+    const expectedPrefix = `chat_images/${userId}/`;
+    const expectedDeliveryType = imageMode === "once" ? "authenticated" : "upload";
+
+    if (!media.publicId.startsWith(expectedPrefix)) {
+      return NextResponse.json({ error: "Media không thuộc tài khoản hiện tại" }, { status: 400 });
+    }
+    if (media.deliveryType !== expectedDeliveryType) {
+      return NextResponse.json({ error: "Media delivery mode không hợp lệ" }, { status: 400 });
+    }
+
+    persistedMedia = media;
+    imageUrl = imageMode === "normal" ? getCloudinaryPublicImageUrl(media.publicId, media.format) : null;
+  } else if (legacyImageUrl) {
+    if (!isManagedCloudinaryImageUrl(legacyImageUrl)) {
+      return NextResponse.json({ error: "Media URL không thuộc Spackie" }, { status: 400 });
+    }
+    if (imageMode === "once") {
+      return NextResponse.json({ error: "Ảnh xem một lần cần protected upload" }, { status: 400 });
+    }
+    imageUrl = legacyImageUrl;
   }
 
   if (clientMessageId) {
@@ -233,7 +287,6 @@ export async function POST(req: NextRequest) {
   }
 
   const roomIds = getConversationMessageRoomIds(conversation);
-  const imageMode = imageUrl && parsed.data.imageMode === "once" ? "once" : "normal";
   let replyTarget: any = null;
 
   if (parsed.data.replyToId) {
@@ -242,7 +295,7 @@ export async function POST(req: NextRequest) {
       deleted: { $ne: true },
       $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
     })
-      .select("_id userId username text imageUrl imageMode deleted")
+      .select("_id userId username text imageUrl media imageMode deleted")
       .lean();
 
     if (!replyTarget) {
@@ -250,6 +303,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const hasImage = Boolean(imageUrl || persistedMedia);
   const replyPreview = buildReplyPreview(replyTarget);
   let message;
   try {
@@ -257,12 +311,13 @@ export async function POST(req: NextRequest) {
       roomId: conversationId,
       conversationId: conversation._id,
       clientMessageId,
-      type: imageUrl ? "image" : "text",
+      type: hasImage ? "image" : "text",
       userId: user._id,
       username: user.displayName || user.username,
       text,
+      media: persistedMedia,
       imageUrl,
-      imageMode,
+      imageMode: hasImage && imageMode === "once" ? "once" : "normal",
       replyTo: replyTarget?._id ?? null,
     });
   } catch (error: any) {
@@ -279,7 +334,7 @@ export async function POST(req: NextRequest) {
   const messageSnapshot = {
     messageId: message._id,
     senderId: user._id,
-    type: imageUrl ? "image" : "text",
+    type: hasImage ? "image" : "text",
     preview: getMessagePreview(message),
     createdAt: message.createdAt,
   };
