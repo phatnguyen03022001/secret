@@ -21,6 +21,10 @@ export interface ConversationMeta {
     blockedByMe: boolean;
     blockedMe: boolean;
   };
+  identity: {
+    myAlias: string | null;
+    peerAlias: string | null;
+  };
 }
 
 export function useChat(currentUser: any, roomId: string) {
@@ -61,6 +65,7 @@ export function useChat(currentUser: any, roomId: string) {
         expiresAt: data.expiresAt || null,
         burn: data.burn || { requestedBy: [], requestedByMe: false, requestedByPeer: false },
         access: data.access || { blockedByMe: false, blockedMe: false },
+        identity: data.identity || { myAlias: null, peerAlias: null },
       });
     } catch {
       // Message loading remains usable even if metadata refresh fails.
@@ -264,6 +269,21 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
+    const handleIdentityUpdated = (data: { conversationId: string; userId: string; alias: string | null }) => {
+      if (data.conversationId !== roomId) return;
+      setConversationMeta((previous) =>
+        previous
+          ? {
+              ...previous,
+              identity: {
+                ...previous.identity,
+                ...(data.userId === userId ? { myAlias: data.alias } : { peerAlias: data.alias }),
+              },
+            }
+          : previous,
+      );
+    };
+
     const handleConversationRemoved = (data: { conversationId: string }) => {
       if (data.conversationId !== roomId) return;
       setConversationRemoved(true);
@@ -279,6 +299,7 @@ export function useChat(currentUser: any, roomId: string) {
     channel.bind("typing-changed", handleTypingChanged);
     channel.bind("burn-status", handleBurnStatus);
     channel.bind("block-status", handleBlockStatus);
+    channel.bind("identity-updated", handleIdentityUpdated);
     channel.bind("conversation-removed", handleConversationRemoved);
 
     return () => {
