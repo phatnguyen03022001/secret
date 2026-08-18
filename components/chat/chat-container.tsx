@@ -212,7 +212,7 @@ export default function ChatContainer({
 
       {!readOnly && (
         <div className="p-4 border-t border-border bg-background safe-bottom">
-          <ChatInput roomId={roomId} />
+          <ChatInput roomId={roomId} setMessages={setMessages} />
         </div>
       )}
     </div>
