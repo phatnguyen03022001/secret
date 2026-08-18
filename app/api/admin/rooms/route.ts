@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import User from "@/models/User";
-import mongoose from "mongoose";
+import { getParticipantsFromRoomId } from "@/lib/utils";
 
 export async function GET(req: NextRequest) {
   try {
@@ -13,7 +14,6 @@ export async function GET(req: NextRequest) {
     if (!admin) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
     if (!admin.isAdmin) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -22,41 +22,62 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") || "20", 10), 1), 50);
     const skip = (page - 1) * limit;
 
-    const allRoomIds = await Message.distinct("roomId");
-    allRoomIds.sort();
+    const [conversations, rawRoomIds] = await Promise.all([
+      Conversation.find({}).sort({ "lastMessage.createdAt": -1, updatedAt: -1 }).lean(),
+      Message.distinct("roomId"),
+    ]);
 
-    const totalRooms = allRoomIds.length;
-    const paginatedRoomIds = allRoomIds.slice(skip, skip + limit);
-    const hasMore = skip + paginatedRoomIds.length < totalRooms;
+    const knownRawRoomIds = new Set<string>();
+    const entries: Array<{ roomId: string; userIds: string[]; sortAt: Date }> = [];
 
-    if (paginatedRoomIds.length === 0) {
-      return NextResponse.json({ rooms: [], hasMore, nextPage: page + 1 });
-    }
+    for (const conversation of conversations as any[]) {
+      const conversationId = conversation._id.toString();
+      knownRawRoomIds.add(conversationId);
+      if (conversation.legacyRoomId) knownRawRoomIds.add(conversation.legacyRoomId);
 
-    const roomData = paginatedRoomIds.map((roomId) => {
-      const parts = roomId.split("-");
-      const userIds = parts.filter((part: string) => part !== "room" && part !== "" && mongoose.Types.ObjectId.isValid(part));
-      return { roomId, userIds };
-    });
-
-    const uniqueUserIds = [...new Set(roomData.flatMap((room) => room.userIds))];
-    const usersMap = new Map<string, { _id: unknown; username: string }>();
-
-    if (uniqueUserIds.length > 0) {
-      const users = await User.find({ _id: { $in: uniqueUserIds } }).select("username");
-      users.forEach((user) => {
-        usersMap.set(user._id.toString(), { _id: user._id, username: user.username });
+      entries.push({
+        roomId: conversationId,
+        userIds: conversation.members.map((member: any) => member.userId.toString()),
+        sortAt: new Date(conversation.lastMessage?.createdAt ?? conversation.updatedAt),
       });
     }
 
-    const result = roomData
-      .map((room) => ({
-        roomId: room.roomId,
-        participants: room.userIds.map((id: string) => usersMap.get(id)).filter(Boolean),
+    for (const rawRoomId of rawRoomIds) {
+      if (knownRawRoomIds.has(rawRoomId)) continue;
+      const userIds = getParticipantsFromRoomId(rawRoomId);
+      if (userIds.length === 0) continue;
+
+      const latest = await Message.findOne({ roomId: rawRoomId }).sort({ createdAt: -1 }).select("createdAt").lean();
+      entries.push({
+        roomId: rawRoomId,
+        userIds,
+        sortAt: new Date(latest?.createdAt ?? 0),
+      });
+    }
+
+    entries.sort((a, b) => b.sortAt.getTime() - a.sortAt.getTime());
+
+    const paginatedEntries = entries.slice(skip, skip + limit);
+    const uniqueUserIds = [...new Set(paginatedEntries.flatMap((entry) => entry.userIds))];
+    const users = await User.find({ _id: { $in: uniqueUserIds } }).select("username isAdmin").lean();
+    const usersMap = new Map(users.map((user: any) => [user._id.toString(), user]));
+
+    const rooms = paginatedEntries
+      .map((entry) => ({
+        roomId: entry.roomId,
+        conversationId: entry.roomId,
+        participants: entry.userIds
+          .map((id) => usersMap.get(id))
+          .filter(Boolean)
+          .map((user: any) => ({ _id: user._id, username: user.username, isAdmin: user.isAdmin })),
       }))
       .filter((room) => room.participants.length > 0);
 
-    return NextResponse.json({ rooms: result, hasMore, nextPage: page + 1 });
+    return NextResponse.json({
+      rooms,
+      hasMore: skip + paginatedEntries.length < entries.length,
+      nextPage: page + 1,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });
