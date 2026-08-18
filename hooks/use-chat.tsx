@@ -22,9 +22,21 @@ function advanceReceipt(current: unknown, next: ReceiptState): ReceiptState {
   return RECEIPT_RANK[next] > RECEIPT_RANK[normalized] ? next : normalized;
 }
 
-function isAtOrBeforeCursor(messageId: unknown, cursorId: unknown) {
-  if (!messageId || !cursorId) return false;
-  return messageId.toString() <= cursorId.toString();
+function isAtOrBeforeReceipt(message: any, receiptAt?: string | null, receiptId?: string | null) {
+  if (!message?._id) return false;
+
+  if (receiptAt) {
+    const messageTime = new Date(message.createdAt).getTime();
+    const receiptTime = new Date(receiptAt).getTime();
+    if (Number.isFinite(messageTime) && Number.isFinite(receiptTime)) {
+      if (messageTime < receiptTime) return true;
+      if (messageTime > receiptTime) return false;
+      if (!receiptId) return true;
+      return message._id.toString() <= receiptId.toString();
+    }
+  }
+
+  return Boolean(receiptId && message._id.toString() <= receiptId.toString());
 }
 
 export interface ConversationMeta {
@@ -102,7 +114,7 @@ export function useChat(currentUser: any, roomId: string) {
           body: JSON.stringify({ roomId, messageId: messageId || undefined }),
         });
       } catch {
-        // Delivery state will reconcile from the server on refresh/reconnect.
+        // Receipt state reconciles from the server on refresh/reconnect.
       }
     },
     [isAdmin, roomId, userId],
@@ -216,7 +228,7 @@ export function useChat(currentUser: any, roomId: string) {
           if (msg._id !== messageId) return msg;
           return isAdminRef.current
             ? { ...msg, deleted: true }
-            : { ...msg, deleted: true, text: null, imageUrl: null, onceAvailable: false };
+            : { ...msg, deleted: true, text: null, imageUrl: null, media: null, onceAvailable: false };
         }),
       );
     };
@@ -238,24 +250,38 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
-    const handleMessagesDelivered = (data: { userId: string; messageId?: string | null }) => {
+    const handleMessagesDelivered = (data: {
+      userId: string;
+      messageId?: string | null;
+      deliveredAt?: string | null;
+    }) => {
       if (!data.messageId || data.userId === userId) return;
 
       setMessages((previous) =>
         previous.map((message) =>
-          message.userId?.toString() === userId && isAtOrBeforeCursor(message._id, data.messageId)
+          message.userId?.toString() === userId && isAtOrBeforeReceipt(message, data.deliveredAt, data.messageId)
             ? { ...message, receiptState: advanceReceipt(message.receiptState, "delivered") }
             : message,
         ),
       );
     };
 
-    const handleMessagesSeen = (data: { userId: string; messageId?: string | null; isAdmin: boolean }) => {
+    const handleMessagesSeen = (data: {
+      userId: string;
+      messageId?: string | null;
+      seenAt?: string | null;
+      isAdmin: boolean;
+    }) => {
       if (data.isAdmin || !data.messageId || data.userId === userId) return;
 
       setMessages((previous) =>
         previous.map((message) => {
-          if (message.userId?.toString() !== userId || !isAtOrBeforeCursor(message._id, data.messageId)) return message;
+          if (
+            message.userId?.toString() !== userId ||
+            !isAtOrBeforeReceipt(message, data.seenAt, data.messageId)
+          ) {
+            return message;
+          }
           const seen = message.seenBy || [];
           return {
             ...message,
