@@ -230,6 +230,10 @@ export async function POST(req: NextRequest) {
   const memberIds = getConversationMemberIds(conversation);
   const userId = user._id.toString();
   const peerId = memberIds.find((memberId) => memberId !== userId);
+  const memberAliases = new Map(
+    conversation.members.map((member: any) => [member.userId.toString(), member.alias?.trim() || null]),
+  );
+  const senderName = memberAliases.get(userId) || user.displayName || user.username;
 
   if (!user.isAdmin && peerId && (await isBlockedBetween(userId, peerId))) {
     return NextResponse.json({ error: "Không thể gửi tin nhắn trong cuộc trò chuyện này" }, { status: 403 });
@@ -324,7 +328,7 @@ export async function POST(req: NextRequest) {
       clientMessageId,
       type: hasImage ? "image" : "text",
       userId: user._id,
-      username: user.displayName || user.username,
+      username: senderName,
       text,
       media: persistedMedia,
       imageUrl,
@@ -372,6 +376,7 @@ export async function POST(req: NextRequest) {
     const otherMemberId = memberIds.find((id: string) => id !== participantId);
     const otherMember = otherMemberId ? membersMap.get(otherMemberId) : null;
     const canSeeLastSeen = participant?.isAdmin || otherMember?.privacy?.showLastSeen !== false;
+    const otherAlias = otherMemberId ? memberAliases.get(otherMemberId) || null : null;
 
     return pusherServer.trigger(userChannel(participantId), "rooms-updated", {
       roomId: conversationId,
@@ -385,7 +390,9 @@ export async function POST(req: NextRequest) {
         ? {
             _id: otherMember._id,
             username: otherMember.username,
-            displayName: otherMember.displayName || otherMember.username,
+            displayName: otherAlias || otherMember.displayName || otherMember.username,
+            profileDisplayName: otherMember.displayName || otherMember.username,
+            conversationAlias: otherAlias,
             accountType: otherMember.accountType || "registered",
             isAdmin: otherMember.isAdmin,
             lastActive: canSeeLastSeen ? otherMember.lastActive ?? null : null,
