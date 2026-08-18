@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
+import { consumeRateLimit, getRequestIp } from "@/lib/security/rate-limit";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -21,6 +22,20 @@ const registerSchema = z
   });
 
 export async function POST(req: Request) {
+  const rateLimit = await consumeRateLimit({
+    scope: "register",
+    identifier: getRequestIp(req),
+    limit: 5,
+    windowSeconds: 60 * 60,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Quá nhiều tài khoản được tạo từ kết nối này. Hãy thử lại sau." },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
+  }
+
   await connectDB();
 
   let body: unknown;
