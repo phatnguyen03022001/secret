@@ -6,7 +6,7 @@ import { vi } from "date-fns/locale";
 import { toast } from "sonner";
 import MessageItem from "./message-item";
 import ChatInput from "./chat-input";
-import { Clock3, Flame, Loader2, ChevronDown, ChevronLeft, History, X } from "lucide-react";
+import { Ban, Clock3, Flame, Loader2, ChevronDown, ChevronLeft, History, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConversationPresence } from "@/hooks/use-presence";
 import type { ReplyPreview } from "@/lib/chat/client";
@@ -77,6 +77,7 @@ export default function ChatContainer({
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [replyTarget, setReplyTarget] = useState<ReplyPreview | null>(null);
   const [burnBusy, setBurnBusy] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
@@ -88,6 +89,8 @@ export default function ChatContainer({
   const { peerOnline } = useConversationPresence(roomId, targetUser._id);
   const lifecycleLabel = getLifecycleLabel(conversationMeta);
   const burn = conversationMeta?.burn;
+  const access = conversationMeta?.access;
+  const messagingBlocked = Boolean(access?.blockedByMe || access?.blockedMe);
 
   const presenceLabel = targetIsTyping
     ? "đang nhập..."
@@ -98,6 +101,7 @@ export default function ChatContainer({
   useEffect(() => {
     setReplyTarget(null);
     setBurnBusy(false);
+    setBlockBusy(false);
   }, [roomId]);
 
   useEffect(() => {
@@ -149,6 +153,10 @@ export default function ChatContainer({
     );
   };
 
+  const updateAccessState = (nextAccess: { blockedByMe: boolean; blockedMe: boolean }) => {
+    setConversationMeta?.((previous) => (previous ? { ...previous, access: nextAccess } : previous));
+  };
+
   const requestBurn = async () => {
     if (burnBusy || currentUser.isAdmin) return;
     setBurnBusy(true);
@@ -178,6 +186,39 @@ export default function ChatContainer({
       toast.error(error instanceof Error ? error.message : "Không thể huỷ yêu cầu burn");
     } finally {
       setBurnBusy(false);
+    }
+  };
+
+  const blockTarget = async () => {
+    if (blockBusy || currentUser.isAdmin) return;
+    setBlockBusy(true);
+
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(targetUser._id)}/block`, { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể chặn người dùng");
+      updateAccessState({ blockedByMe: true, blockedMe: Boolean(data?.blockedMe) });
+      setReplyTarget(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể chặn người dùng");
+    } finally {
+      setBlockBusy(false);
+    }
+  };
+
+  const unblockTarget = async () => {
+    if (blockBusy || currentUser.isAdmin) return;
+    setBlockBusy(true);
+
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(targetUser._id)}/block`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể bỏ chặn");
+      updateAccessState({ blockedByMe: Boolean(data?.blockedByMe), blockedMe: Boolean(data?.blockedMe) });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể bỏ chặn");
+    } finally {
+      setBlockBusy(false);
     }
   };
 
@@ -239,7 +280,7 @@ export default function ChatContainer({
           )}
           <div className="relative h-9 w-9 rounded-full bg-muted border border-border flex items-center justify-center font-bold text-xs shrink-0">
             {targetDisplayName.slice(0, 1).toUpperCase()}
-            {peerOnline && (
+            {peerOnline && !messagingBlocked && (
               <span className="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-background" />
             )}
           </div>
@@ -251,17 +292,29 @@ export default function ChatContainer({
               )}
             </div>
             <p className={`text-[10px] mt-1 truncate ${peerOnline || targetIsTyping ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
-              {presenceLabel}
+              {messagingBlocked ? "Messaging unavailable" : presenceLabel}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           {lifecycleLabel && (
-            <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground">
+            <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground mr-1">
               <Clock3 className="h-3 w-3" />
               {lifecycleLabel}
             </span>
+          )}
+          {!readOnly && !currentUser.isAdmin && conversationMeta && !messagingBlocked && (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={blockBusy}
+              onClick={blockTarget}
+              aria-label="Chặn người dùng"
+              title="Chặn người dùng"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+              {blockBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+            </Button>
           )}
           {!readOnly && !currentUser.isAdmin && !burn?.requestedByPeer && !burn?.requestedByMe && (
             <Button
@@ -282,6 +335,23 @@ export default function ChatContainer({
         <div className="sm:hidden px-4 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground flex items-center gap-1.5">
           <Clock3 className="h-3 w-3" />
           {lifecycleLabel}
+        </div>
+      )}
+
+      {access?.blockedByMe && !currentUser.isAdmin && (
+        <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium">Bạn đã chặn {targetDisplayName}. Lịch sử vẫn được giữ, gửi tin nhắn đã bị khoá.</p>
+          </div>
+          <Button variant="outline" size="sm" disabled={blockBusy} onClick={unblockTarget} className="h-7 text-xs">
+            {blockBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Bỏ chặn"}
+          </Button>
+        </div>
+      )}
+
+      {access?.blockedMe && !access.blockedByMe && !currentUser.isAdmin && (
+        <div className="px-4 py-2.5 border-b border-border bg-muted/20 text-xs text-muted-foreground">
+          Không thể gửi tin nhắn trong cuộc trò chuyện này. Lịch sử cũ vẫn có thể xem.
         </div>
       )}
 
@@ -344,7 +414,7 @@ export default function ChatContainer({
                   isMe={msg.userId === observedUserId}
                   currentUser={currentUser}
                   setMessages={setMessages}
-                  onReply={!readOnly && !currentUser.isAdmin ? setReplyTarget : undefined}
+                  onReply={!readOnly && !currentUser.isAdmin && !messagingBlocked ? setReplyTarget : undefined}
                 />
               ))
             )}
@@ -362,7 +432,7 @@ export default function ChatContainer({
         </Button>
       )}
 
-      {!readOnly && (
+      {!readOnly && !messagingBlocked && (
         <div className="border-t border-border bg-background safe-bottom">
           <div className="h-5 px-5 pt-1 text-[10px] text-muted-foreground">
             {targetIsTyping ? `${targetDisplayName} đang nhập...` : ""}
