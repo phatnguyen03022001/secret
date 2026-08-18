@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { findConversationByExternalId } from "@/lib/chat/conversations";
 import Message from "@/models/Message";
-import User from "@/models/User";
-import { getParticipantsFromRoomId } from "@/lib/utils";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await connectDB();
@@ -21,42 +20,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Message not found" }, { status: 404 });
   }
 
-  const roomParticipants = getParticipantsFromRoomId(message.roomId);
-  const isParticipant = roomParticipants.includes(userId);
-  const isSender = message.userId.toString() === userId;
-  const isAdmin = user.isAdmin;
-
-  if (!isSender && !isAdmin && !isParticipant) {
-    return NextResponse.json({ error: "Forbidden: You are not in this conversation" }, { status: 403 });
+  const conversation = await findConversationByExternalId(message.conversationId?.toString() || message.roomId);
+  if (!conversation) {
+    return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
   }
 
-  if (isAdmin) {
-    const participantsInfo = await User.find({ _id: { $in: roomParticipants } })
-      .select("isAdmin")
-      .lean();
-    const hasNonAdmin = participantsInfo.some((participant) => !participant.isAdmin);
-    if (hasNonAdmin) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+  const isMember = conversation.members.some((member: any) => member.userId.toString() === userId);
+  const isSender = message.userId.toString() === userId;
+
+  if (!user.isAdmin && !isMember) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   if (message.imageMode !== "once") {
     return NextResponse.json({ success: true, imageUrl: message.imageUrl });
   }
 
+  if (user.isAdmin) {
+    return NextResponse.json({ success: true, imageUrl: message.imageUrl, godView: true });
+  }
+
   if (isSender) {
-    return NextResponse.json({ error: "Sender cannot mark once-viewed" }, { status: 403 });
+    return NextResponse.json({ error: "Sender cannot consume view-once media" }, { status: 403 });
   }
 
-  if (isAdmin) {
-    return NextResponse.json({ success: true, imageUrl: message.imageUrl });
+  const consumed = await Message.findOneAndUpdate(
+    {
+      _id: message._id,
+      imageMode: "once",
+      onceViewedBy: { $ne: user._id },
+    },
+    { $addToSet: { onceViewedBy: user._id } },
+    { new: false },
+  ).select("imageUrl");
+
+  if (!consumed) {
+    return NextResponse.json({ error: "Ảnh này đã được xem" }, { status: 409 });
   }
 
-  if (message.onceViewedBy?.some((viewerId: { toString(): string }) => viewerId.toString() === userId)) {
-    return NextResponse.json({ error: "Bạn đã xem ảnh này rồi" }, { status: 403 });
-  }
-
-  await Message.updateOne({ _id: id }, { $addToSet: { onceViewedBy: user._id } });
-
-  return NextResponse.json({ success: true, imageUrl: message.imageUrl });
+  return NextResponse.json({ success: true, imageUrl: consumed.imageUrl });
 }
