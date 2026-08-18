@@ -1,16 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { User as UserIcon, ShieldCheck, Search, Loader2, MoreHorizontal, Mail } from "lucide-react";
+import { User as UserIcon, ShieldCheck, Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
-
 import { formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
-import { getPusherClient } from "../../lib/client";
+import { getPusherClient } from "@/lib/client";
+import { adminGlobalChannel } from "@/lib/realtime/channels";
 
 interface User {
   _id: string;
@@ -39,7 +38,7 @@ export function AdminUserList() {
       const data = await res.json();
 
       setUsers((prev) => (isLoadMore ? [...prev, ...data.users] : data.users));
-      setHasMore(data.hasMore || false);
+      setHasMore(Boolean(data.hasMore));
       setPage(pageToLoad);
     } catch (error) {
       console.error("Fetch error:", error);
@@ -55,20 +54,23 @@ export function AdminUserList() {
 
   useEffect(() => {
     const pusher = getPusherClient();
-    const channel = pusher.subscribe("admin-global");
-    channel.bind("user-online", (data: { userId: string; lastActive: string }) => {
-      setUsers((prev) => prev.map((u) => (u._id === data.userId ? { ...u, lastActive: data.lastActive } : u)));
-    });
+    const channelName = adminGlobalChannel();
+    const channel = pusher.subscribe(channelName);
+
+    const handleUserOnline = (data: { userId: string; lastActive: string }) => {
+      setUsers((prev) => prev.map((user) => (user._id === data.userId ? { ...user, lastActive: data.lastActive } : user)));
+    };
+
+    channel.bind("user-online", handleUserOnline);
     return () => {
-      channel.unbind("user-online");
-      pusher.unsubscribe("admin-global");
+      channel.unbind("user-online", handleUserOnline);
+      pusher.unsubscribe(channelName);
     };
   }, []);
 
   const filteredUsers = useMemo(() => {
-    return users.filter(
-      (u) => u.username.toLowerCase().includes(searchQuery.toLowerCase()) || u._id.includes(searchQuery),
-    );
+    const query = searchQuery.toLowerCase();
+    return users.filter((user) => user.username.toLowerCase().includes(query) || user._id.includes(searchQuery));
   }, [users, searchQuery]);
 
   if (loading && page === 1) {
@@ -87,16 +89,14 @@ export function AdminUserList() {
           <p className="text-sm text-muted-foreground">Quản lý danh sách thực thể và phân quyền hệ thống.</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Tìm kiếm người dùng..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9"
-            />
-          </div>
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Tìm kiếm người dùng..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            className="pl-9 h-9"
+          />
         </div>
       </div>
 
@@ -106,12 +106,12 @@ export function AdminUserList() {
             <div className="relative w-full overflow-auto">
               <table className="w-full caption-bottom text-sm">
                 <thead className="bg-muted/30 sticky top-0 z-10 border-b">
-                  <tr className="transition-colors">
+                  <tr>
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Người dùng</th>
                     <th className="h-10 px-4 text-right align-middle font-medium text-muted-foreground">Trạng thái</th>
                   </tr>
                 </thead>
-                <tbody className="[&_tr:last-child]:border-0">
+                <tbody>
                   {filteredUsers.map((user) => {
                     const online =
                       user.lastActive && new Date().getTime() - new Date(user.lastActive).getTime() < 5 * 60 * 1000;
