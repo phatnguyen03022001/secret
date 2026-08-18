@@ -8,6 +8,7 @@ import {
   getConversationMessageRoomIds,
   getMessagePreview,
 } from "@/lib/chat/conversations";
+import { conversationChannel, userChannel } from "@/lib/realtime/channels";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import mongoose from "mongoose";
@@ -52,7 +53,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   message.deletedAt = new Date();
   await message.save();
 
-  await pusherServer.trigger(`chat-${realtimeRoomId}`, "message-deleted", {
+  await pusherServer.trigger(conversationChannel(realtimeRoomId), "message-deleted", {
     messageId: message._id.toString(),
   });
 
@@ -85,7 +86,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     };
 
     await Promise.all(
-      participants.map((participantId) => pusherServer.trigger(`user-${participantId}`, "rooms-updated", updatePayload)),
+      participants.map((participantId) => pusherServer.trigger(userChannel(participantId), "rooms-updated", updatePayload)),
     );
   }
 
