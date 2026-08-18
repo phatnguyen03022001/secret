@@ -6,7 +6,9 @@ const ConversationMemberSchema = new Schema(
     alias: { type: String, default: null },
     unreadCount: { type: Number, default: 0, min: 0 },
     lastReadMessageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    lastReadAt: { type: Date, default: null },
     lastDeliveredMessageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    lastDeliveredAt: { type: Date, default: null },
   },
   { _id: false },
 );
