@@ -52,21 +52,25 @@ export async function ensureConversationRetentionIndex() {
 export function getMessagePreview(message: {
   deleted?: boolean;
   text?: string | null;
+  media?: { publicId?: string | null } | null;
   imageUrl?: string | null;
   imageMode?: string | null;
 }) {
   if (message.deleted) return "[Tin nhắn đã bị gỡ]";
   if (message.text?.trim()) return message.text.trim().slice(0, 180);
-  if (message.imageUrl) return message.imageMode === "once" ? "Ảnh xem một lần" : "Đã gửi một ảnh";
+  if (message.imageUrl || message.media?.publicId) {
+    return message.imageMode === "once" ? "Ảnh xem một lần" : "Đã gửi một ảnh";
+  }
   return "";
 }
 
 function getLastMessageSnapshot(message: any) {
   if (!message) return null;
+  const hasImage = Boolean(message.imageUrl || message.media?.publicId);
   return {
     messageId: message._id,
     senderId: message.userId,
-    type: message.imageUrl ? "image" : "text",
+    type: hasImage ? "image" : "text",
     preview: getMessagePreview(message),
     createdAt: message.createdAt,
   };
