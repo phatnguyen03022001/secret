@@ -45,6 +45,7 @@ export async function POST(req: Request) {
     username,
     isAdmin: false,
     accountType: { $ne: "guest" },
+    status: { $ne: "suspended" },
   });
 
   if (!user?.password || !(await bcrypt.compare(parsed.data.password, user.password))) {
