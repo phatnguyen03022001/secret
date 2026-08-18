@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const targetUser = await User.findById(targetMember.userId)
-    .select("username displayName accountType isAdmin")
+    .select("username displayName accountType isAdmin lastActive")
     .lean();
 
   if (!targetUser) {
@@ -44,6 +44,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       displayName: targetUser.displayName || targetUser.username,
       accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
+      lastActive: targetUser.lastActive ?? null,
     },
   });
 }
