@@ -110,9 +110,19 @@ async function getReplyPreviewForMessage(message: any) {
   return buildReplyPreview(replyTarget);
 }
 
-function isAtOrBeforeCursor(messageId: unknown, cursorId?: unknown) {
-  if (!messageId || !cursorId) return false;
-  return messageId.toString() <= cursorId.toString();
+function isAtOrBeforeReceipt(message: any, receiptAt?: Date | null, receiptId?: unknown) {
+  if (!message?._id) return false;
+
+  if (receiptAt) {
+    const messageTime = new Date(message.createdAt).getTime();
+    const receiptTime = new Date(receiptAt).getTime();
+    if (messageTime < receiptTime) return true;
+    if (messageTime > receiptTime) return false;
+    if (!receiptId) return true;
+    return message._id.toString() <= receiptId.toString();
+  }
+
+  return Boolean(receiptId && message._id.toString() <= receiptId.toString());
 }
 
 export async function GET(req: NextRequest) {
@@ -146,7 +156,7 @@ export async function GET(req: NextRequest) {
     queryFilter._id = { $lt: new mongoose.Types.ObjectId(cursor) };
   }
 
-  const messages = await Message.find(queryFilter).sort({ createdAt: -1 }).limit(limit).lean().exec();
+  const messages = await Message.find(queryFilter).sort({ createdAt: -1, _id: -1 }).limit(limit).lean().exec();
   const replyIds = [
     ...new Set(
       messages
@@ -166,7 +176,9 @@ export async function GET(req: NextRequest) {
     ? conversation.members.find((member: any) => member.userId.toString() !== viewerId)
     : null;
   const peerDeliveredCursor = peerMember?.lastDeliveredMessageId || null;
+  const peerDeliveredAt = peerMember?.lastDeliveredAt || null;
   const peerReadCursor = peerMember?.lastReadMessageId || null;
+  const peerReadAt = peerMember?.lastReadAt || null;
 
   const processed = messages.map((message: any) => {
     const item = { ...message };
@@ -178,8 +190,8 @@ export async function GET(req: NextRequest) {
     }
 
     if (isSender && !viewer.isAdmin) {
-      if (isAtOrBeforeCursor(item._id, peerReadCursor)) item.receiptState = "seen";
-      else if (isAtOrBeforeCursor(item._id, peerDeliveredCursor)) item.receiptState = "delivered";
+      if (isAtOrBeforeReceipt(item, peerReadAt, peerReadCursor)) item.receiptState = "seen";
+      else if (isAtOrBeforeReceipt(item, peerDeliveredAt, peerDeliveredCursor)) item.receiptState = "delivered";
       else if ((item.seenBy ?? []).length > 0) item.receiptState = "seen";
       else item.receiptState = "sent";
     }
