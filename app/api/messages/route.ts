@@ -7,6 +7,7 @@ import {
   getMessagePreview,
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
+import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import User from "@/models/User";
@@ -119,7 +120,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Không có quyền gửi vào cuộc trò chuyện này" }, { status: 403 });
   }
 
-  const userId = user._id.toString();
   const text = parsed.data.text.trim();
   const imageUrl = parsed.data.imageUrl ?? null;
   const clientMessageId = parsed.data.clientMessageId;
@@ -186,13 +186,13 @@ export async function POST(req: NextRequest) {
   const membersMap = new Map(members.map((member: any) => [member._id.toString(), member]));
   const realtimeMessage = sanitizeMessageForRealtime(message);
 
-  await pusherServer.trigger(`chat-${conversationId}`, "new-message", realtimeMessage);
+  await pusherServer.trigger(conversationChannel(conversationId), "new-message", realtimeMessage);
 
   const userUpdates = memberIds.map((participantId: string) => {
     const otherMemberId = memberIds.find((id: string) => id !== participantId);
     const otherMember = otherMemberId ? membersMap.get(otherMemberId) : null;
 
-    return pusherServer.trigger(`user-${participantId}`, "rooms-updated", {
+    return pusherServer.trigger(userChannel(participantId), "rooms-updated", {
       roomId: conversationId,
       conversationId,
       lastMessage: {
@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
   const hasAdminMember = members.some((member: any) => member.isAdmin);
   const adminUpdate = hasAdminMember
     ? Promise.resolve()
-    : pusherServer.trigger("admin-global", "rooms-updated", {
+    : pusherServer.trigger(adminGlobalChannel(), "rooms-updated", {
         roomId: conversationId,
         conversationId,
         lastMessage: realtimeMessage,
