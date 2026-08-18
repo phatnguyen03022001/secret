@@ -3,6 +3,7 @@ import mongoose, { Schema, model, models } from "mongoose";
 const ConversationMemberSchema = new Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    alias: { type: String, default: null },
     unreadCount: { type: Number, default: 0, min: 0 },
     lastReadMessageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
     lastDeliveredMessageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
