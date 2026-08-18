@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 interface User {
   _id: string;
   username: string;
+  displayName: string;
+  accountType: "registered" | "guest";
   isAdmin: boolean;
 }
 
@@ -15,6 +17,7 @@ interface AuthContextType {
   login: (username: string, password: string, isAdmin?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   register: (username: string, password: string, confirmPassword: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,10 +27,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  const refreshUser = async () => {
+    const response = await fetch("/api/me", { cache: "no-store" });
+    setUser(response.ok ? await response.json() : null);
+  };
+
   useEffect(() => {
-    fetch("/api/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setUser(data))
+    refreshUser()
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
@@ -58,11 +64,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ username, password, confirmPassword }),
     });
     if (!res.ok) throw new Error(await res.text());
-    // Sau khi đăng ký, tự động đăng nhập
     await login(username, password, false);
   };
 
-  return <AuthContext.Provider value={{ user, loading, login, logout, register }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, loading, login, logout, register, refreshUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
