@@ -18,8 +18,13 @@ export async function GET(req: NextRequest) {
   const page = Math.max(parseInt(req.nextUrl.searchParams.get("page") || "1", 10), 1);
   const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") || "20", 10), 1), 50);
   const skip = (page - 1) * limit;
+  const now = new Date();
 
-  const membershipFilter = { "members.userId": currentUser._id };
+  const membershipFilter = {
+    "members.userId": currentUser._id,
+    $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }],
+  };
+
   const [totalRooms, conversations] = await Promise.all([
     Conversation.countDocuments(membershipFilter),
     Conversation.find(membershipFilter)
@@ -64,6 +69,8 @@ export async function GET(req: NextRequest) {
       return {
         roomId: conversationId,
         conversationId,
+        lifecycle: conversation.lifecycle || "persistent",
+        expiresAt: conversation.expiresAt ?? null,
         otherUser: {
           _id: otherUser._id,
           username: otherUser.username,
