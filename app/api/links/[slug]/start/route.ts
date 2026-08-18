@@ -1,10 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createSession, getCurrentUser } from "@/lib/auth/session";
-import { ensureDirectConversation } from "@/lib/chat/conversations";
+import { ensureDirectConversation, getDirectKey } from "@/lib/chat/conversations";
+import { purgeConversationById } from "@/lib/chat/retention";
 import { getChatLinkBySlug } from "@/lib/chat/links";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { consumeRateLimit, getRequestIp } from "@/lib/security/rate-limit";
 import { connectDB } from "@/lib/server";
+import Conversation from "@/models/Conversation";
 import User from "@/models/User";
 import { z } from "zod";
 
@@ -93,9 +96,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ slu
     });
   }
 
-  const conversation = await ensureDirectConversation(currentActor, owner, {
-    lifecycle: link.lifecycle || "persistent",
-  });
+  const actorId = currentActor._id.toString();
+  const ownerId = owner._id.toString();
+
+  if (await isBlockedBetween(actorId, ownerId)) {
+    return NextResponse.json({ error: "Link not found" }, { status: 404 });
+  }
+
+  const directKey = getDirectKey(actorId, ownerId);
+  let existingConversation = await Conversation.findOne({ directKey });
+
+  if (existingConversation?.expiresAt && existingConversation.expiresAt.getTime() <= Date.now()) {
+    await purgeConversationById(existingConversation._id.toString(), "expired");
+    existingConversation = null;
+  }
+
+  const conversation =
+    existingConversation ||
+    (await ensureDirectConversation(currentActor, owner, {
+      lifecycle: link.lifecycle || "persistent",
+    }));
 
   return NextResponse.json({
     conversationId: conversation._id.toString(),
