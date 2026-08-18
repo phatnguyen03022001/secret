@@ -17,6 +17,10 @@ export interface ConversationMeta {
     requestedByMe: boolean;
     requestedByPeer: boolean;
   };
+  access: {
+    blockedByMe: boolean;
+    blockedMe: boolean;
+  };
 }
 
 export function useChat(currentUser: any, roomId: string) {
@@ -56,6 +60,7 @@ export function useChat(currentUser: any, roomId: string) {
         lifecycle: data.lifecycle || "persistent",
         expiresAt: data.expiresAt || null,
         burn: data.burn || { requestedBy: [], requestedByMe: false, requestedByPeer: false },
+        access: data.access || { blockedByMe: false, blockedMe: false },
       });
     } catch {
       // Message loading remains usable even if metadata refresh fails.
@@ -239,6 +244,26 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
+    const handleBlockStatus = (data: {
+      conversationId: string;
+      blockerId: string | null;
+      blockedId: string | null;
+      blocked: boolean;
+    }) => {
+      if (data.conversationId !== roomId) return;
+      setConversationMeta((previous) =>
+        previous
+          ? {
+              ...previous,
+              access: {
+                blockedByMe: Boolean(data.blocked && data.blockerId === userId),
+                blockedMe: Boolean(data.blocked && data.blockedId === userId),
+              },
+            }
+          : previous,
+      );
+    };
+
     const handleConversationRemoved = (data: { conversationId: string }) => {
       if (data.conversationId !== roomId) return;
       setConversationRemoved(true);
@@ -253,6 +278,7 @@ export function useChat(currentUser: any, roomId: string) {
     channel.bind("message-reactions", handleReactions);
     channel.bind("typing-changed", handleTypingChanged);
     channel.bind("burn-status", handleBurnStatus);
+    channel.bind("block-status", handleBlockStatus);
     channel.bind("conversation-removed", handleConversationRemoved);
 
     return () => {
