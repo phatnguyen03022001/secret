@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     .filter((id: string) => id !== currentUser._id.toString());
 
   const users = await User.find({ _id: { $in: [...new Set(otherUserIds)] } })
-    .select("username displayName accountType isAdmin lastActive")
+    .select("username displayName accountType isAdmin lastActive privacy.showLastSeen")
     .lean();
   const usersMap = new Map(users.map((user: any) => [user._id.toString(), user]));
 
@@ -65,6 +65,7 @@ export async function GET(req: NextRequest) {
             userId: conversation.lastMessage.senderId,
           }
         : undefined;
+      const canSeeLastSeen = currentUser.isAdmin || otherUser.privacy?.showLastSeen !== false;
 
       return {
         roomId: conversationId,
@@ -76,7 +77,7 @@ export async function GET(req: NextRequest) {
           username: otherUser.username,
           displayName: otherUser.displayName || otherUser.username,
           accountType: otherUser.accountType || "registered",
-          lastActive: otherUser.lastActive ?? null,
+          lastActive: canSeeLastSeen ? otherUser.lastActive ?? null : null,
         },
         lastMessageAt: conversation.lastMessage?.createdAt ?? conversation.updatedAt,
         lastMessage,
