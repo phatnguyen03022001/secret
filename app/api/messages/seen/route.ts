@@ -7,6 +7,19 @@ import { conversationChannel, userChannel } from "@/lib/realtime/channels";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 
+function isNewerReceipt(
+  candidate: { _id: mongoose.Types.ObjectId; createdAt: Date },
+  currentAt?: Date | null,
+  currentId?: mongoose.Types.ObjectId | null,
+) {
+  if (!currentAt) return true;
+  const candidateTime = new Date(candidate.createdAt).getTime();
+  const currentTime = new Date(currentAt).getTime();
+  if (candidateTime !== currentTime) return candidateTime > currentTime;
+  if (!currentId) return true;
+  return candidate._id.toString() > currentId.toString();
+}
+
 export async function POST(req: NextRequest) {
   await connectDB();
 
@@ -33,29 +46,49 @@ export async function POST(req: NextRequest) {
   if (!conversation) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const userId = user._id.toString();
-  const isMember = conversation.members.some((member: any) => member.userId.toString() === userId);
-  if (user.isAdmin && !isMember) return NextResponse.json({ modified: 0, godView: true });
+  const member = conversation.members.find((item: any) => item.userId.toString() === userId);
+  if (user.isAdmin && !member) return NextResponse.json({ modified: 0, godView: true });
+  if (!member) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const roomIds = getConversationMessageRoomIds(conversation);
   const peerMessageFilter: Record<string, unknown> = {
     userId: { $ne: user._id },
+    deleted: { $ne: true },
     $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
   };
 
   let latestPeerMessage: any = null;
   if (requestedMessageId) {
-    latestPeerMessage = await Message.findOne({ ...peerMessageFilter, _id: requestedMessageId }).select("_id").lean();
+    latestPeerMessage = await Message.findOne({ ...peerMessageFilter, _id: requestedMessageId })
+      .select("_id createdAt")
+      .lean();
   }
   if (!latestPeerMessage) {
-    latestPeerMessage = await Message.findOne(peerMessageFilter).sort({ createdAt: -1 }).select("_id").lean();
+    latestPeerMessage = await Message.findOne(peerMessageFilter)
+      .sort({ createdAt: -1, _id: -1 })
+      .select("_id createdAt")
+      .lean();
   }
 
   const memberUpdate: Record<string, unknown> = {
     "members.$.unreadCount": 0,
   };
-  if (latestPeerMessage?._id) {
+
+  const advancesRead = Boolean(
+    latestPeerMessage && isNewerReceipt(latestPeerMessage, member.lastReadAt, member.lastReadMessageId),
+  );
+  const advancesDelivered = Boolean(
+    latestPeerMessage &&
+      isNewerReceipt(latestPeerMessage, member.lastDeliveredAt, member.lastDeliveredMessageId),
+  );
+
+  if (latestPeerMessage?._id && advancesRead) {
     memberUpdate["members.$.lastReadMessageId"] = latestPeerMessage._id;
+    memberUpdate["members.$.lastReadAt"] = latestPeerMessage.createdAt;
+  }
+  if (latestPeerMessage?._id && advancesDelivered) {
     memberUpdate["members.$.lastDeliveredMessageId"] = latestPeerMessage._id;
+    memberUpdate["members.$.lastDeliveredAt"] = latestPeerMessage.createdAt;
   }
 
   await Conversation.updateOne(
@@ -66,12 +99,13 @@ export async function POST(req: NextRequest) {
   if (!user.isAdmin) {
     const conversationId = conversation._id.toString();
     await Promise.all([
-      latestPeerMessage?._id
+      latestPeerMessage?._id && advancesRead
         ? pusherServer.trigger(conversationChannel(conversationId), "messages-seen", {
             roomId: conversationId,
             conversationId,
             userId,
             messageId: latestPeerMessage._id.toString(),
+            seenAt: latestPeerMessage.createdAt,
             isAdmin: false,
           })
         : Promise.resolve(),
@@ -84,7 +118,8 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    modified: latestPeerMessage?._id ? 1 : 0,
-    messageId: latestPeerMessage?._id?.toString() || null,
+    modified: latestPeerMessage?._id && advancesRead ? 1 : 0,
+    messageId: advancesRead ? latestPeerMessage?._id?.toString() || null : member.lastReadMessageId?.toString() || null,
+    seenAt: advancesRead ? latestPeerMessage?.createdAt || null : member.lastReadAt || null,
   });
 }
