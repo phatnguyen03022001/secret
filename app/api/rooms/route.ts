@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import Message from "@/models/Message";
+import { migrateLegacyConversationsForUser } from "@/lib/chat/conversations";
+import Conversation from "@/models/Conversation";
 import User from "@/models/User";
-import mongoose from "mongoose";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -13,69 +13,71 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = currentUser._id.toString();
-  const escapedUserId = userId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const roomIdPattern = `(^|-)${escapedUserId}(-|$)`;
+  await migrateLegacyConversationsForUser(currentUser);
 
   const page = Math.max(parseInt(req.nextUrl.searchParams.get("page") || "1", 10), 1);
   const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") || "20", 10), 1), 50);
   const skip = (page - 1) * limit;
 
-  const rooms = await Message.aggregate([
-    { $match: { roomId: { $regex: roomIdPattern, $options: "" } } },
-    { $group: { _id: "$roomId", lastMessageAt: { $max: "$createdAt" } } },
-    { $sort: { lastMessageAt: -1 } },
-    { $skip: skip },
-    { $limit: limit },
-    { $project: { roomId: "$_id", _id: 0, lastMessageAt: 1 } },
+  const membershipFilter = { "members.userId": currentUser._id };
+  const [totalRooms, conversations] = await Promise.all([
+    Conversation.countDocuments(membershipFilter),
+    Conversation.find(membershipFilter)
+      .sort({ "lastMessage.createdAt": -1, updatedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
   ]);
 
-  const totalCountResult = await Message.aggregate([
-    { $match: { roomId: { $regex: roomIdPattern, $options: "" } } },
-    { $group: { _id: "$roomId" } },
-    { $count: "total" },
-  ]);
-  const totalRooms = totalCountResult[0]?.total || 0;
-  const hasMore = skip + rooms.length < totalRooms;
+  const otherUserIds = conversations
+    .flatMap((conversation: any) => conversation.members)
+    .map((member: any) => member.userId.toString())
+    .filter((id: string) => id !== currentUser._id.toString());
 
-  const result = [];
-  for (const room of rooms) {
-    const { roomId, lastMessageAt } = room;
-    const parts = roomId.split("-");
-    const otherUserId = parts.find((id: string) => id !== userId && id !== "room");
+  const users = await User.find({ _id: { $in: [...new Set(otherUserIds)] } })
+    .select("username isAdmin")
+    .lean();
+  const usersMap = new Map(users.map((user: any) => [user._id.toString(), user]));
 
-    if (!otherUserId || !mongoose.Types.ObjectId.isValid(otherUserId)) continue;
+  const rooms = conversations
+    .map((conversation: any) => {
+      const currentMember = conversation.members.find(
+        (member: any) => member.userId.toString() === currentUser._id.toString(),
+      );
+      const otherMember = conversation.members.find(
+        (member: any) => member.userId.toString() !== currentUser._id.toString(),
+      );
+      if (!otherMember) return null;
 
-    const otherUser = await User.findById(otherUserId).select("username isAdmin");
-    if (!otherUser || otherUser.isAdmin) continue;
+      const otherUser = usersMap.get(otherMember.userId.toString());
+      if (!otherUser || otherUser.isAdmin) return null;
 
-    const [unreadCount, latestMessage] = await Promise.all([
-      Message.countDocuments({
-        roomId,
-        seenBy: { $ne: currentUser._id },
-        userId: { $ne: currentUser._id },
-      }),
-      Message.findOne({ roomId }).sort({ createdAt: -1 }).select("text imageUrl createdAt userId deleted").lean(),
-    ]);
+      const conversationId = conversation._id.toString();
+      const lastMessage = conversation.lastMessage
+        ? {
+            content: conversation.lastMessage.preview,
+            createdAt: conversation.lastMessage.createdAt,
+            userId: conversation.lastMessage.senderId,
+          }
+        : undefined;
 
-    const lastMessage = latestMessage
-      ? {
-          content: latestMessage.deleted
-            ? "[Tin nhắn đã bị gỡ]"
-            : latestMessage.text || (latestMessage.imageUrl ? "Đã gửi một ảnh" : ""),
-          createdAt: latestMessage.createdAt,
-          userId: latestMessage.userId,
-        }
-      : undefined;
+      return {
+        roomId: conversationId,
+        conversationId,
+        otherUser: {
+          _id: otherUser._id,
+          username: otherUser.username,
+        },
+        lastMessageAt: conversation.lastMessage?.createdAt ?? conversation.updatedAt,
+        lastMessage,
+        unreadCount: currentMember?.unreadCount ?? 0,
+      };
+    })
+    .filter(Boolean);
 
-    result.push({
-      roomId,
-      otherUser: { _id: otherUserId, username: otherUser.username },
-      lastMessageAt,
-      lastMessage,
-      unreadCount,
-    });
-  }
-
-  return NextResponse.json({ rooms: result, hasMore, nextPage: page + 1 });
+  return NextResponse.json({
+    rooms,
+    hasMore: skip + conversations.length < totalRooms,
+    nextPage: page + 1,
+  });
 }
