@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     .filter((id: string) => id !== currentUser._id.toString());
 
   const users = await User.find({ _id: { $in: [...new Set(otherUserIds)] } })
-    .select("username displayName accountType isAdmin")
+    .select("username displayName accountType isAdmin lastActive")
     .lean();
   const usersMap = new Map(users.map((user: any) => [user._id.toString(), user]));
 
@@ -69,6 +69,7 @@ export async function GET(req: NextRequest) {
           username: otherUser.username,
           displayName: otherUser.displayName || otherUser.username,
           accountType: otherUser.accountType || "registered",
+          lastActive: otherUser.lastActive ?? null,
         },
         lastMessageAt: conversation.lastMessage?.createdAt ?? conversation.updatedAt,
         lastMessage,
