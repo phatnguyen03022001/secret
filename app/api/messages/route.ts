@@ -7,6 +7,7 @@ import {
   getMessagePreview,
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
+import { isManagedCloudinaryImageUrl } from "@/lib/media/cloudinary";
 import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import Conversation from "@/models/Conversation";
@@ -141,6 +142,10 @@ export async function POST(req: NextRequest) {
 
   if (!text && !imageUrl) {
     return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
+  }
+
+  if (imageUrl && !isManagedCloudinaryImageUrl(imageUrl)) {
+    return NextResponse.json({ error: "Media URL không thuộc Spackie" }, { status: 400 });
   }
 
   if (!user.isAdmin && text.length > 160) {
