@@ -47,35 +47,54 @@ export function ConversationList({
   const [page, setPage] = useState(1);
   const isFetchingRef = useRef(false);
 
-  const fetchRooms = useCallback(async (pageToLoad: number, isLoadMore = false) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-
-    if (!isLoadMore) setLoading(true);
-    else setLoadingMore(true);
-
-    try {
-      const response = await fetch(`/api/rooms?page=${pageToLoad}&limit=20`);
-      if (!response.ok) throw new Error("Failed to fetch conversations");
-
-      const data = await response.json();
-      const validRooms = (data.rooms || []).filter((room: Room) => !room.otherUser?.isAdmin);
-
-      setRooms((previous) => {
-        if (!isLoadMore) return validRooms;
-        const knownIds = new Set(previous.map((room) => room.roomId));
-        return [...previous, ...validRooms.filter((room: Room) => !knownIds.has(room.roomId))];
-      });
-      setHasMore(Boolean(data.hasMore));
-      setPage(pageToLoad);
-    } catch (error) {
-      console.error("Fetch rooms error:", error);
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-      isFetchingRef.current = false;
-    }
+  const acknowledgeDelivered = useCallback((roomId: string) => {
+    if (!roomId) return;
+    void fetch("/api/messages/delivered", {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId }),
+    }).catch(() => undefined);
   }, []);
+
+  const fetchRooms = useCallback(
+    async (pageToLoad: number, isLoadMore = false) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+
+      if (!isLoadMore) setLoading(true);
+      else setLoadingMore(true);
+
+      try {
+        const response = await fetch(`/api/rooms?page=${pageToLoad}&limit=20`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to fetch conversations");
+
+        const data = await response.json();
+        const validRooms = (data.rooms || []).filter((room: Room) => !room.otherUser?.isAdmin);
+
+        for (const room of validRooms as Room[]) {
+          if (room.lastMessage && room.lastMessage.userId?.toString() !== currentUserId) {
+            acknowledgeDelivered(room.roomId);
+          }
+        }
+
+        setRooms((previous) => {
+          if (!isLoadMore) return validRooms;
+          const knownIds = new Set(previous.map((room) => room.roomId));
+          return [...previous, ...validRooms.filter((room: Room) => !knownIds.has(room.roomId))];
+        });
+        setHasMore(Boolean(data.hasMore));
+        setPage(pageToLoad);
+      } catch (error) {
+        console.error("Fetch rooms error:", error);
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [acknowledgeDelivered, currentUserId],
+  );
 
   useEffect(() => {
     fetchRooms(1, false);
@@ -93,9 +112,11 @@ export function ConversationList({
       }
       if (data.otherUser?.isAdmin) return;
 
+      const isOwnMessage = data.lastMessage?.userId?.toString() === currentUserId;
+      if (!isOwnMessage) acknowledgeDelivered(data.roomId);
+
       setRooms((previous) => {
         const roomIndex = previous.findIndex((room) => room.roomId === data.roomId);
-        const isOwnMessage = data.lastMessage?.userId?.toString() === currentUserId;
         const isOpen = data.roomId === selectedRoomId;
 
         if (roomIndex !== -1) {
@@ -175,7 +196,7 @@ export function ConversationList({
       channel.unbind("identity-updated", handleIdentityUpdated);
       pusher.unsubscribe(channelName);
     };
-  }, [currentUserId, fetchRooms, selectedRoomId]);
+  }, [acknowledgeDelivered, currentUserId, fetchRooms, selectedRoomId]);
 
   const loadMore = () => {
     if (!hasMore || loadingMore) return;
