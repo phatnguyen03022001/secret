@@ -17,6 +17,18 @@ const EditHistorySchema = new Schema(
   { _id: false },
 );
 
+const MediaSchema = new Schema(
+  {
+    publicId: { type: String, required: true },
+    deliveryType: { type: String, enum: ["upload", "authenticated"], required: true },
+    format: { type: String, required: true },
+    width: { type: Number, required: true, min: 1 },
+    height: { type: Number, required: true, min: 1 },
+    bytes: { type: Number, required: true, min: 1 },
+  },
+  { _id: false },
+);
+
 const MessageSchema = new Schema(
   {
     roomId: { type: String, required: true, index: true },
@@ -26,6 +38,7 @@ const MessageSchema = new Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     username: { type: String, required: true },
     text: { type: String, default: "" },
+    media: { type: MediaSchema, default: null },
     imageUrl: { type: String, default: null },
     imageMode: { type: String, enum: ["normal", "once"], default: "normal" },
     onceViewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
