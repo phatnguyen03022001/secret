@@ -3,11 +3,8 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import MessageItem from "./message-item";
 import ChatInput from "./chat-input";
-import { Loader2, ChevronDown, ChevronLeft, History, Info, MoreHorizontal } from "lucide-react";
+import { Loader2, ChevronDown, ChevronLeft, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getPusherClient } from "@/lib/client";
-import { cn } from "@/lib/utils";
-import { useHeartbeat } from "../../hooks/useHeartbeat";
 
 interface ChatContainerProps {
   currentUser: { _id: string; username: string; isAdmin: boolean };
@@ -36,41 +33,14 @@ export default function ChatContainer({
   loadingMore = false,
   onBack,
 }: ChatContainerProps) {
-  useHeartbeat();
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
-  const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
-
-  const lastMessage = messages[messages.length - 1];
-  const isMessageFromOther = lastMessage && lastMessage.userId !== currentUser._id;
-  const alreadySeenByMe = lastMessage?.seenBy?.includes(currentUser._id);
-  const lastMessageId = messages[messages.length - 1]?._id;
   const hasMarkedSeenRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!roomId) return;
-    const pusher = getPusherClient();
-    const channel = pusher.subscribe(`chat-${roomId}`);
-
-    const handleMessagesSeen = ({ userId }: { userId: string }) => {
-      // Cập nhật seenBy cho tất cả tin nhắn chưa có userId này
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.userId !== userId && !msg.seenBy?.includes(userId)
-            ? { ...msg, seenBy: [...(msg.seenBy || []), userId] }
-            : msg,
-        ),
-      );
-    };
-
-    channel.bind("messages-seen", handleMessagesSeen);
-    return () => {
-      channel.unbind("messages-seen", handleMessagesSeen);
-      pusher.unsubscribe(`chat-${roomId}`);
-    };
-  }, [roomId, setMessages]);
+  const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
+  const lastMessageId = messages[messages.length - 1]?._id;
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -81,21 +51,21 @@ export default function ChatContainer({
     const alreadySeen = lastMsg.seenBy?.includes(currentUser._id);
     const shouldMark = isFromOther && !alreadySeen && !currentUser.isAdmin;
 
-    // Nếu không cần mark, hoặc đã mark tin nhắn này rồi thì thoát
     if (!shouldMark || hasMarkedSeenRef.current === lastMsg._id) return;
-
     hasMarkedSeenRef.current = lastMsg._id;
 
     const markAsSeen = async () => {
       try {
-        await fetch(`/api/messages/seen`, {
+        const response = await fetch("/api/messages/seen", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ roomId, messageId: lastMsg._id }),
         });
+        if (!response.ok) return;
+
         setMessages((prev) =>
           prev.map((msg) =>
-            msg._id === lastMsg._id ? { ...msg, seenBy: [...(msg.seenBy || []), currentUser._id] } : msg,
+            msg._id === lastMsg._id ? { ...msg, seenBy: [...new Set([...(msg.seenBy || []), currentUser._id])] } : msg,
           ),
         );
       } catch (error) {
@@ -123,10 +93,8 @@ export default function ChatContainer({
     await loadMoreOlder();
 
     setTimeout(() => {
-      if (container) {
-        const newScrollHeight = container.scrollHeight;
-        container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
-      }
+      const newScrollHeight = container.scrollHeight;
+      container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
     }, 0);
   };
 
@@ -153,13 +121,13 @@ export default function ChatContainer({
       prevMessagesLengthRef.current = messages.length;
       return () => clearTimeout(timer);
     }
+
     lastMessageIdRef.current = lastMsg?._id;
     prevMessagesLengthRef.current = messages.length;
   }, [messages, loading, currentUser._id, scrollToBottom]);
 
   return (
     <div className="flex flex-col h-full bg-background relative">
-      {/* HEADER */}
       <header className="h-14 md:h-16 shrink-0 px-4 flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-30">
         <div className="flex items-center gap-3 min-w-0">
           {onBack && (
@@ -172,12 +140,10 @@ export default function ChatContainer({
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-bold truncate leading-none">{targetUser?.username}</h3>
-            <div className="flex items-center gap-1.5 mt-1"></div>
           </div>
         </div>
       </header>
 
-      {/* MESSAGES VIEWPORT */}
       <div
         ref={scrollViewportRef}
         onScroll={handleScroll}
@@ -217,7 +183,6 @@ export default function ChatContainer({
         </div>
       </div>
 
-      {/* SCROLL TO BOTTOM BUTTON */}
       {showScrollButton && (
         <Button
           size="icon"
@@ -228,12 +193,9 @@ export default function ChatContainer({
         </Button>
       )}
 
-      {/* INPUT AREA */}
       {!readOnly && (
         <div className="p-4 border-t border-border bg-background safe-bottom">
-          <div className="mx-auto">
-            <ChatInput roomId={roomId} />
-          </div>
+          <ChatInput roomId={roomId} />
         </div>
       )}
     </div>
