@@ -14,11 +14,12 @@ import {
   Info,
   Lock,
   RotateCcw,
+  Reply,
 } from "lucide-react";
 import { useState, useEffect, useRef, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { MessageSendPayload, sendMessageIdempotently } from "@/lib/chat/client";
+import { MessageSendPayload, ReplyPreview, sendMessageIdempotently } from "@/lib/chat/client";
 
 interface User {
   _id: string;
@@ -30,12 +31,14 @@ interface Message {
   _id: string;
   clientMessageId?: string;
   userId: string;
+  username?: string;
   text?: string;
   imageUrl?: string | null;
   imageMode?: "normal" | "once";
   onceViewedBy?: string[];
   onceAvailable?: boolean;
   onceViewed?: boolean;
+  replyPreview?: ReplyPreview | null;
   deleted?: boolean;
   seenBy?: string[];
   createdAt: string;
@@ -49,9 +52,10 @@ interface Props {
   isMe: boolean;
   currentUser: User;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  onReply?: (target: ReplyPreview) => void;
 }
 
-function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
+function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [openingOnce, setOpeningOnce] = useState(false);
@@ -68,6 +72,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
   const deliveryFailed = message.deliveryState === "failed";
   const deliveryPending = message.deliveryState === "sending" || retrying;
   const canDelete = isMe && !currentUser.isAdmin && !isLocalMessage && !deliveryFailed;
+  const canReply = Boolean(onReply && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed);
   const canViewDirectly = isMe || currentUser.isAdmin;
   const alreadyViewed =
     message.onceViewed === true ||
@@ -98,6 +103,14 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
       ),
     );
   };
+
+  const makeReplyTarget = (): ReplyPreview => ({
+    messageId: message._id,
+    senderId: message.userId,
+    senderName: message.username || (isMe ? "Bạn" : "Spackie user"),
+    type: isOnceImage || message.imageUrl ? "image" : "text",
+    content: isOnceImage ? "Ảnh xem một lần" : message.imageUrl ? message.text?.trim() || "Ảnh" : message.text?.trim() || "Tin nhắn",
+  });
 
   useEffect(() => {
     return () => clearTimers();
@@ -205,6 +218,27 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
     }
   };
 
+  const RenderReplyQuote = () => {
+    if (!message.replyPreview) return null;
+
+    return (
+      <div
+        className={cn(
+          "mb-2.5 rounded-lg border-l-2 px-2.5 py-2 text-left min-w-0",
+          isMe
+            ? "border-primary-foreground/60 bg-primary-foreground/10"
+            : "border-primary/50 bg-background/60",
+        )}>
+        <p className={cn("text-[10px] font-semibold truncate", isMe ? "text-primary-foreground/80" : "text-primary")}>
+          {message.replyPreview.senderName}
+        </p>
+        <p className={cn("text-[11px] truncate", isMe ? "text-primary-foreground/70" : "text-muted-foreground")}>
+          {message.replyPreview.content}
+        </p>
+      </div>
+    );
+  };
+
   const RenderContent = () => {
     if (message.deleted) {
       if (currentUser.isAdmin) {
@@ -236,6 +270,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
 
     return (
       <div className="space-y-2.5">
+        <RenderReplyQuote />
         {message.text && <p className="text-[14px] leading-relaxed whitespace-pre-wrap tracking-normal">{message.text}</p>}
 
         {(message.imageUrl || isOnceImage) && (
@@ -338,15 +373,30 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
           )}
         </div>
 
-        {canDelete && !message.deleted && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleDelete}
-            disabled={deleting}
-            className="h-8 w-8 rounded-full opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all">
-            {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-          </Button>
+        {(canReply || canDelete) && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {canReply && onReply && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onReply(makeReplyTarget())}
+                aria-label="Trả lời tin nhắn"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted">
+                <Reply className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleDelete}
+                disabled={deleting}
+                aria-label="Thu hồi tin nhắn"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+                {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
