@@ -7,8 +7,46 @@ import Message from "@/models/Message";
 import User from "@/models/User";
 import { getParticipantsFromRoomId, getPrivateRoomId } from "@/lib/utils";
 
+export type ConversationLifecycle = "persistent" | "quick" | "temporary";
+
+let retentionIndexPromise: Promise<void> | null = null;
+
 export function getDirectKey(userAId: string, userBId: string) {
   return [userAId, userBId].sort().join(":");
+}
+
+export function getLifecycleExpiry(lifecycle: ConversationLifecycle, now = new Date()) {
+  if (lifecycle === "persistent") return null;
+  const expiresAt = new Date(now);
+  expiresAt.setHours(expiresAt.getHours() + (lifecycle === "quick" ? 24 : 24 * 7));
+  return expiresAt;
+}
+
+export async function ensureConversationRetentionIndex() {
+  await connectDB();
+  if (retentionIndexPromise) return retentionIndexPromise;
+
+  retentionIndexPromise = (async () => {
+    const indexes = await Conversation.collection.indexes();
+    const unsafeTtlIndex = indexes.find(
+      (index: any) => index.name === "expiresAt_1" && typeof index.expireAfterSeconds === "number",
+    );
+
+    if (unsafeTtlIndex) {
+      await Conversation.collection.dropIndex("expiresAt_1");
+    }
+
+    const refreshedIndexes = await Conversation.collection.indexes();
+    const hasLookupIndex = refreshedIndexes.some((index: any) => index.name === "expiresAt_lookup");
+    if (!hasLookupIndex) {
+      await Conversation.collection.createIndex({ expiresAt: 1 }, { name: "expiresAt_lookup" });
+    }
+  })().catch((error) => {
+    retentionIndexPromise = null;
+    throw error;
+  });
+
+  return retentionIndexPromise;
 }
 
 export function getMessagePreview(message: {
@@ -34,8 +72,13 @@ function getLastMessageSnapshot(message: any) {
   };
 }
 
-export async function ensureDirectConversation(userA: any, userB: any) {
+export async function ensureDirectConversation(
+  userA: any,
+  userB: any,
+  options: { lifecycle?: ConversationLifecycle; expiresAt?: Date | null } = {},
+) {
   await connectDB();
+  await ensureConversationRetentionIndex();
 
   const userAId = userA._id.toString();
   const userBId = userB._id.toString();
@@ -52,6 +95,9 @@ export async function ensureDirectConversation(userA: any, userB: any) {
     Message.countDocuments({ roomId: legacyRoomId, userId: { $ne: userB._id }, seenBy: { $ne: userB._id } }),
   ]);
 
+  const lifecycle = options.lifecycle ?? "persistent";
+  const expiresAt = options.expiresAt === undefined ? getLifecycleExpiry(lifecycle) : options.expiresAt;
+
   return Conversation.findOneAndUpdate(
     { directKey },
     {
@@ -64,6 +110,9 @@ export async function ensureDirectConversation(userA: any, userB: any) {
           { userId: userA._id, unreadCount: userAUnread },
           { userId: userB._id, unreadCount: userBUnread },
         ],
+        lifecycle,
+        expiresAt,
+        burnRequestedBy: [],
         lastMessage: getLastMessageSnapshot(latestLegacyMessage),
       },
     },
@@ -122,6 +171,10 @@ export async function resolveConversationForUser(
 ) {
   const conversation = await findConversationByExternalId(externalId);
   if (!conversation) return null;
+
+  if (conversation.expiresAt && conversation.expiresAt.getTime() <= Date.now()) {
+    return null;
+  }
 
   if (user.isAdmin && options.allowAdminGodView !== false) return conversation;
 
