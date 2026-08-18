@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
-import { resolveConversationForUser } from "@/lib/chat/conversations";
+import { getConversationMemberIds, resolveConversationForUser } from "@/lib/chat/conversations";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { conversationChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { connectDB, pusherServer } from "@/lib/server";
@@ -72,6 +73,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
   if (!conversation) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const currentUserId = user._id.toString();
+  const peerId = getConversationMemberIds(conversation).find((memberId) => memberId !== currentUserId);
+  if (peerId && (await isBlockedBetween(currentUserId, peerId))) {
+    return NextResponse.json({ error: "Không thể reaction trong cuộc trò chuyện này" }, { status: 403 });
   }
 
   const userId = user._id;
