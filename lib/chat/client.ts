@@ -6,6 +6,7 @@ export interface MessageSendPayload {
   imageUrl: string | null;
   imageMode: "normal" | "once";
   clientMessageId: string;
+  replyToId?: string | null;
 }
 
 async function requestMessage(payload: MessageSendPayload) {
