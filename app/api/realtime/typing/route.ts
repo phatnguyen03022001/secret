@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { resolveConversationForUser } from "@/lib/chat/conversations";
+import { getConversationMemberIds, resolveConversationForUser } from "@/lib/chat/conversations";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { conversationChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { pusherServer } from "@/lib/server";
@@ -44,9 +45,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const userId = user._id.toString();
+  const memberIds = getConversationMemberIds(conversation);
+  const peerId = memberIds.find((memberId) => memberId !== userId);
+  if (peerId && (await isBlockedBetween(userId, peerId))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const currentMember = conversation.members.find((member: any) => member.userId.toString() === userId);
+  const displayName = currentMember?.alias?.trim() || user.displayName || user.username;
+
   await pusherServer.trigger(conversationChannel(conversation._id.toString()), "typing-changed", {
-    userId: user._id.toString(),
-    displayName: user.displayName || user.username,
+    userId,
+    displayName,
     typing: parsed.data.typing,
   });
 
