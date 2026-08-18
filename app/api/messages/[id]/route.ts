@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, pusherServer } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import {
+  findConversationByExternalId,
+  getConversationLastMessageSnapshot,
+  getConversationMemberIds,
+  getConversationMessageRoomIds,
+  getMessagePreview,
+} from "@/lib/chat/conversations";
+import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import mongoose from "mongoose";
 import { z } from "zod";
-import { getParticipantsFromRoomId } from "@/lib/utils";
 
 const paramsSchema = z.object({
   id: z.string().refine((val) => mongoose.Types.ObjectId.isValid(val), {
@@ -38,42 +45,48 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const conversation = await findConversationByExternalId(message.conversationId?.toString() || message.roomId);
+  const realtimeRoomId = conversation?._id.toString() || message.roomId;
+
   message.deleted = true;
   message.deletedAt = new Date();
   await message.save();
 
-  await pusherServer.trigger(`chat-${message.roomId}`, "message-deleted", {
+  await pusherServer.trigger(`chat-${realtimeRoomId}`, "message-deleted", {
     messageId: message._id.toString(),
   });
 
-  const lastMessage = await Message.findOne({ roomId: message.roomId }).sort({ createdAt: -1 }).limit(1);
-  if (lastMessage && lastMessage._id.toString() === id) {
+  if (conversation && conversation.lastMessage?.messageId?.toString() === id) {
+    const roomIds = getConversationMessageRoomIds(conversation);
     const newLastMessage = await Message.findOne({
-      roomId: message.roomId,
-      _id: { $ne: id },
+      _id: { $ne: message._id },
+      deleted: { $ne: true },
+      $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
     })
       .sort({ createdAt: -1 })
-      .limit(1);
+      .lean();
 
-    const participants = getParticipantsFromRoomId(message.roomId);
-    if (participants.length > 0) {
-      const updatePayload = {
-        roomId: message.roomId,
-        lastMessage: newLastMessage
-          ? {
-              _id: newLastMessage._id,
-              text: newLastMessage.text,
-              imageUrl: newLastMessage.imageUrl,
-              createdAt: newLastMessage.createdAt,
-              userId: newLastMessage.userId,
-            }
-          : null,
-      };
+    await Conversation.updateOne(
+      { _id: conversation._id },
+      { $set: { lastMessage: getConversationLastMessageSnapshot(newLastMessage) } },
+    );
 
-      await Promise.all(
-        participants.map((participantId) => pusherServer.trigger(`user-${participantId}`, "rooms-updated", updatePayload)),
-      );
-    }
+    const participants = getConversationMemberIds(conversation);
+    const updatePayload = {
+      roomId: realtimeRoomId,
+      conversationId: realtimeRoomId,
+      lastMessage: newLastMessage
+        ? {
+            content: getMessagePreview(newLastMessage),
+            createdAt: newLastMessage.createdAt,
+            userId: newLastMessage.userId,
+          }
+        : null,
+    };
+
+    await Promise.all(
+      participants.map((participantId) => pusherServer.trigger(`user-${participantId}`, "rooms-updated", updatePayload)),
+    );
   }
 
   return NextResponse.json({ success: true });
