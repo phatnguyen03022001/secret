@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { createSession } from "@/lib/auth/session";
+import { consumeRateLimit, getRequestIp } from "@/lib/security/rate-limit";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -11,6 +12,20 @@ const adminLoginSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const rateLimit = await consumeRateLimit({
+    scope: "admin-login",
+    identifier: getRequestIp(req),
+    limit: 6,
+    windowSeconds: 10 * 60,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Quá nhiều lần đăng nhập. Hãy thử lại sau." },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
+  }
+
   await connectDB();
 
   let body: unknown;
