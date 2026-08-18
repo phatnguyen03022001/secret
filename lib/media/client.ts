@@ -16,7 +16,8 @@ export interface UploadedChatMedia extends ChatMediaPayload {
 interface UploadSignature {
   apiKey: string;
   timestamp: number;
-  folder: string;
+  publicId: string;
+  overwrite: false;
   signature: string;
   deliveryType: "upload" | "authenticated";
   uploadUrl: string;
@@ -60,7 +61,8 @@ export async function uploadChatImageDirect(
   formData.append("api_key", signed.apiKey);
   formData.append("timestamp", String(signed.timestamp));
   formData.append("signature", signed.signature);
-  formData.append("folder", signed.folder);
+  formData.append("public_id", signed.publicId);
+  formData.append("overwrite", "false");
 
   return new Promise<UploadedChatMedia>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -89,7 +91,7 @@ export async function uploadChatImageDirect(
       const bytes = Number(data?.bytes || 0);
       const secureUrl = typeof data?.secure_url === "string" ? data.secure_url : null;
 
-      if (!publicId.startsWith(`${signed.folder}/`) || !format || width <= 0 || height <= 0 || bytes <= 0) {
+      if (publicId !== signed.publicId || !format || width <= 0 || height <= 0 || bytes <= 0) {
         reject(new Error("Cloudinary trả về metadata không hợp lệ"));
         return;
       }
