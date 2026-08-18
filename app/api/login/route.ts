@@ -26,9 +26,13 @@ export async function POST(req: Request) {
   }
 
   const username = parsed.data.username.toLowerCase();
-  const user = await User.findOne({ username, isAdmin: false });
+  const user = await User.findOne({
+    username,
+    isAdmin: false,
+    accountType: { $ne: "guest" },
+  });
 
-  if (!user || !(await bcrypt.compare(parsed.data.password, user.password))) {
+  if (!user?.password || !(await bcrypt.compare(parsed.data.password, user.password))) {
     return NextResponse.json({ error: "Sai tên đăng nhập hoặc mật khẩu" }, { status: 401 });
   }
 
@@ -40,6 +44,8 @@ export async function POST(req: Request) {
     user: {
       _id: user._id,
       username: user.username,
+      displayName: user.displayName || user.username,
+      accountType: user.accountType || "registered",
       isAdmin: user.isAdmin,
     },
   });
