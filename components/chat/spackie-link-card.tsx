@@ -1,16 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Copy, Link2, Loader2, Pause, Play, RefreshCw, Share2 } from "lucide-react";
+import { Check, Clock3, Copy, Link2, Loader2, Pause, Play, RefreshCw, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface LinkData {
   slug: string;
   path: string;
   enabled: boolean;
   allowGuests?: boolean;
-  lifecycle?: "persistent" | "quick" | "temporary";
+  lifecycle: "persistent" | "quick" | "temporary";
 }
+
+const lifecycleOptions = [
+  { value: "persistent" as const, label: "Giữ lại" },
+  { value: "quick" as const, label: "24 giờ" },
+  { value: "temporary" as const, label: "7 ngày" },
+];
 
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
@@ -32,7 +39,7 @@ export function SpackieLinkCard() {
   const [link, setLink] = useState<LinkData | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [busyAction, setBusyAction] = useState<"toggle" | "rotate" | null>(null);
+  const [busyAction, setBusyAction] = useState<"toggle" | "rotate" | "lifecycle" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,7 +70,10 @@ export function SpackieLinkCard() {
     return `${window.location.origin}${link.path}`;
   };
 
-  const patchLink = async (payload: Record<string, unknown>, action: "toggle" | "rotate") => {
+  const patchLink = async (
+    payload: Record<string, unknown>,
+    action: "toggle" | "rotate" | "lifecycle",
+  ) => {
     if (!link || busyAction) return;
     setBusyAction(action);
     setError(null);
@@ -140,6 +150,30 @@ export function SpackieLinkCard() {
           <p className="mt-1 text-[10px] text-muted-foreground/70">
             {link.enabled ? "Ai có link có thể bắt đầu chat." : "Link đang tạm dừng. Conversation cũ vẫn giữ nguyên."}
           </p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-border/50 bg-muted/10 p-2.5">
+        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+          <Clock3 className="h-3.5 w-3.5" />
+          Conversation mới từ link
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {lifecycleOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              disabled={!!busyAction}
+              onClick={() => patchLink({ lifecycle: option.value }, "lifecycle")}
+              className={cn(
+                "h-7 rounded-lg border text-[10px] font-semibold transition-colors disabled:opacity-50",
+                link.lifecycle === option.value
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border/60 bg-background hover:bg-muted/50",
+              )}>
+              {busyAction === "lifecycle" && link.lifecycle !== option.value ? option.label : option.label}
+            </button>
+          ))}
         </div>
       </div>
 
