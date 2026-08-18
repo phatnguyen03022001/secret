@@ -7,9 +7,17 @@ import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import mongoose from "mongoose";
 
-function isNewerObjectId(candidate: mongoose.Types.ObjectId, current?: mongoose.Types.ObjectId | null) {
-  if (!current) return true;
-  return candidate.toString() > current.toString();
+function isNewerReceipt(
+  candidate: { _id: mongoose.Types.ObjectId; createdAt: Date },
+  currentAt?: Date | null,
+  currentId?: mongoose.Types.ObjectId | null,
+) {
+  if (!currentAt) return true;
+  const candidateTime = new Date(candidate.createdAt).getTime();
+  const currentTime = new Date(currentAt).getTime();
+  if (candidateTime !== currentTime) return candidateTime > currentTime;
+  if (!currentId) return true;
+  return candidate._id.toString() > currentId.toString();
 }
 
 export async function POST(req: NextRequest) {
@@ -41,24 +49,36 @@ export async function POST(req: NextRequest) {
   const roomIds = getConversationMessageRoomIds(conversation);
   const filter: Record<string, unknown> = {
     userId: { $ne: user._id },
+    deleted: { $ne: true },
     $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
   };
   if (messageId) filter._id = messageId;
 
-  const deliveredMessage = await Message.findOne(filter).sort(messageId ? undefined : { createdAt: -1 }).select("_id").lean();
+  const deliveredMessage = await Message.findOne(filter)
+    .sort(messageId ? undefined : { createdAt: -1, _id: -1 })
+    .select("_id createdAt")
+    .lean();
   if (!deliveredMessage?._id) return NextResponse.json({ delivered: false });
 
   const userId = user._id.toString();
   const member = conversation.members.find((item: any) => item.userId.toString() === userId);
   if (!member) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  if (!isNewerObjectId(deliveredMessage._id, member.lastDeliveredMessageId)) {
-    return NextResponse.json({ delivered: false, messageId: member.lastDeliveredMessageId?.toString() || null });
+  if (!isNewerReceipt(deliveredMessage as any, member.lastDeliveredAt, member.lastDeliveredMessageId)) {
+    return NextResponse.json({
+      delivered: false,
+      messageId: member.lastDeliveredMessageId?.toString() || null,
+    });
   }
 
   await Conversation.updateOne(
     { _id: conversation._id, "members.userId": user._id },
-    { $set: { "members.$.lastDeliveredMessageId": deliveredMessage._id } },
+    {
+      $set: {
+        "members.$.lastDeliveredMessageId": deliveredMessage._id,
+        "members.$.lastDeliveredAt": deliveredMessage.createdAt,
+      },
+    },
   );
 
   const conversationId = conversation._id.toString();
@@ -67,7 +87,12 @@ export async function POST(req: NextRequest) {
     conversationId,
     userId,
     messageId: deliveredMessage._id.toString(),
+    deliveredAt: deliveredMessage.createdAt,
   });
 
-  return NextResponse.json({ delivered: true, messageId: deliveredMessage._id.toString() });
+  return NextResponse.json({
+    delivered: true,
+    messageId: deliveredMessage._id.toString(),
+    deliveredAt: deliveredMessage.createdAt,
+  });
 }
