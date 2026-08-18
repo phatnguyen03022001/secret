@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { getBlockedUserIds } from "@/lib/privacy/blocks";
 import User from "@/models/User";
 
 export async function GET(req: NextRequest) {
@@ -20,15 +21,28 @@ export async function GET(req: NextRequest) {
 
   const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const maybeId = keyword.length === 24 ? keyword : null;
+  const blockedIds = await getBlockedUserIds(currentUser._id.toString());
+  const excludedIds = [currentUser._id.toString(), ...blockedIds];
 
   const users = await User.find({
-    _id: { $ne: currentUser._id },
+    _id: { $nin: excludedIds },
     isAdmin: false,
     accountType: { $ne: "guest" },
-    $or: [
-      { username: { $regex: `^${escaped}$`, $options: "i" } },
-      { displayName: { $regex: `^${escaped}$`, $options: "i" } },
-      ...(maybeId ? [{ _id: maybeId }] : []),
+    status: { $ne: "suspended" },
+    $and: [
+      {
+        $or: [
+          { "privacy.allowMessagesFrom": "everyone" },
+          { "privacy.allowMessagesFrom": { $exists: false } },
+        ],
+      },
+      {
+        $or: [
+          { username: { $regex: `^${escaped}$`, $options: "i" } },
+          { displayName: { $regex: `^${escaped}$`, $options: "i" } },
+          ...(maybeId ? [{ _id: maybeId }] : []),
+        ],
+      },
     ],
   })
     .limit(10)
