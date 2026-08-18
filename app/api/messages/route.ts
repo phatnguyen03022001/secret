@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
       clientMessageId,
       type: imageUrl ? "image" : "text",
       userId: user._id,
-      username: user.username,
+      username: user.displayName || user.username,
       isAdmin: user.isAdmin || false,
       text,
       imageUrl,
@@ -182,7 +182,9 @@ export async function POST(req: NextRequest) {
   );
 
   const memberIds = getConversationMemberIds(conversation);
-  const members = await User.find({ _id: { $in: memberIds } }).select("username isAdmin").lean();
+  const members = await User.find({ _id: { $in: memberIds } })
+    .select("username displayName accountType isAdmin")
+    .lean();
   const membersMap = new Map(members.map((member: any) => [member._id.toString(), member]));
   const realtimeMessage = sanitizeMessageForRealtime(message);
 
@@ -201,7 +203,13 @@ export async function POST(req: NextRequest) {
         userId: user._id,
       },
       otherUser: otherMember
-        ? { _id: otherMember._id, username: otherMember.username, isAdmin: otherMember.isAdmin }
+        ? {
+            _id: otherMember._id,
+            username: otherMember.username,
+            displayName: otherMember.displayName || otherMember.username,
+            accountType: otherMember.accountType || "registered",
+            isAdmin: otherMember.isAdmin,
+          }
         : undefined,
     });
   });
