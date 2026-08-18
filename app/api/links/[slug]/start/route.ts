@@ -93,12 +93,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ slu
     });
   }
 
-  const conversation = await ensureDirectConversation(currentActor, owner);
+  const conversation = await ensureDirectConversation(currentActor, owner, {
+    lifecycle: link.lifecycle || "persistent",
+  });
 
   return NextResponse.json({
     conversationId: conversation._id.toString(),
     roomId: conversation._id.toString(),
     createdGuest,
     accountType: currentActor.accountType ?? "registered",
+    lifecycle: conversation.lifecycle || "persistent",
+    expiresAt: conversation.expiresAt ?? null,
   });
 }
