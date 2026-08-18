@@ -1,5 +1,13 @@
 "use client";
 
+export interface ReplyPreview {
+  messageId: string;
+  senderId: string;
+  senderName: string;
+  type: "text" | "image" | "deleted";
+  content: string;
+}
+
 export interface MessageSendPayload {
   roomId: string;
   text: string;
