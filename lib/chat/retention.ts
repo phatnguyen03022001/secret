@@ -5,6 +5,7 @@ import { getManagedCloudinaryPublicId } from "@/lib/media/cloudinary";
 import { conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { connectDB, deleteImageFromCloudinary, pusherServer } from "@/lib/server";
 import Conversation from "@/models/Conversation";
+import MediaUpload from "@/models/MediaUpload";
 import Message from "@/models/Message";
 import Session from "@/models/Session";
 import User from "@/models/User";
@@ -35,6 +36,49 @@ async function cleanupOrphanGuestUsers(memberIds: string[]) {
 
     await Promise.all([Session.deleteMany({ userId: user._id }), User.deleteOne({ _id: user._id })]);
   }
+}
+
+export async function cleanupAbandonedMediaUploads(options: { limit?: number; now?: Date } = {}) {
+  await connectDB();
+
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+  const now = options.now ?? new Date();
+  const uploads = await MediaUpload.find({ cleanupAfter: { $lte: now } })
+    .sort({ cleanupAfter: 1 })
+    .limit(limit)
+    .lean();
+
+  let deletedAssets = 0;
+  let attachedRecords = 0;
+  const errors: Array<{ publicId: string; error: string }> = [];
+
+  for (const upload of uploads as any[]) {
+    try {
+      const attachedMessage = await Message.exists({ "media.publicId": upload.publicId });
+      if (attachedMessage) {
+        await MediaUpload.deleteOne({ _id: upload._id });
+        attachedRecords += 1;
+        continue;
+      }
+
+      const deliveryType = upload.deliveryType === "authenticated" ? "authenticated" : "upload";
+      await deleteImageFromCloudinary(upload.publicId, deliveryType);
+      await MediaUpload.deleteOne({ _id: upload._id });
+      deletedAssets += 1;
+    } catch (error) {
+      errors.push({
+        publicId: upload.publicId,
+        error: error instanceof Error ? error.message : "Unknown media cleanup error",
+      });
+    }
+  }
+
+  return {
+    scanned: uploads.length,
+    deletedAssets,
+    attachedRecords,
+    errors,
+  };
 }
 
 export async function purgeConversationById(conversationId: string, reason: ConversationPurgeReason) {
@@ -74,12 +118,12 @@ export async function purgeConversationById(conversationId: string, reason: Conv
 
   const assets = [...assetMap.values()];
 
-  // External media is deleted first. A retry is safe because Cloudinary "not found" is accepted.
   await deleteCloudinaryAssets(assets);
 
   await Message.deleteMany({
     $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
   });
+  await MediaUpload.deleteMany({ publicId: { $in: assets.map((asset) => asset.publicId) } });
   await Conversation.deleteOne({ _id: conversation._id });
 
   const payload = { conversationId, roomId: conversationId, reason };
