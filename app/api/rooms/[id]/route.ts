@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { resolveConversationForUser } from "@/lib/chat/conversations";
+import { getBlockState } from "@/lib/privacy/blocks";
 import User from "@/models/User";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const targetUser = await User.findById(targetMember.userId)
-    .select("username displayName accountType isAdmin lastActive")
+    .select("username displayName accountType isAdmin lastActive privacy.showLastSeen")
     .lean();
 
   if (!targetUser) {
@@ -34,7 +35,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const conversationId = conversation._id.toString();
-  const burnRequestedBy = (conversation.burnRequestedBy || []).map((id: any) => id.toString());
+  const burnRequestedBy = (conversation.burnRequestedBy || []).map((memberId: any) => memberId.toString());
+  const blockState = isMember && !user.isAdmin
+    ? await getBlockState(userId, targetUser._id.toString())
+    : { blockedByMe: false, blockedMe: false };
+  const canSeeLastSeen = user.isAdmin || targetUser.privacy?.showLastSeen !== false;
 
   return NextResponse.json({
     roomId: conversationId,
@@ -44,15 +49,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     burn: {
       requestedBy: burnRequestedBy,
       requestedByMe: isMember && burnRequestedBy.includes(userId),
-      requestedByPeer: isMember && burnRequestedBy.some((id: string) => id !== userId),
+      requestedByPeer: isMember && burnRequestedBy.some((memberId: string) => memberId !== userId),
     },
+    access: blockState,
     targetUser: {
       _id: targetUser._id,
       username: targetUser.username,
       displayName: targetUser.displayName || targetUser.username,
       accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
-      lastActive: targetUser.lastActive ?? null,
+      lastActive: canSeeLastSeen ? targetUser.lastActive ?? null : null,
     },
   });
 }
