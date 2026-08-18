@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { findConversationByExternalId } from "@/lib/chat/conversations";
+import { getConversationMemberIds, resolveConversationForUser } from "@/lib/chat/conversations";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { pusherServer } from "@/lib/server";
 
 export async function POST(req: NextRequest) {
@@ -37,28 +38,45 @@ export async function POST(req: NextRequest) {
 
   if (isPrivateConversation || isPresenceConversation) {
     const prefix = isPresenceConversation ? presenceConversationPrefix : privateConversationPrefix;
-    const conversationId = channelName.slice(prefix.length);
-    const conversation = await findConversationByExternalId(conversationId);
+    const externalId = channelName.slice(prefix.length);
+    if (!externalId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const conversation = await resolveConversationForUser(externalId, user, {
+      allowAdminGodView: isPrivateConversation,
+    });
     if (!conversation) {
-      return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+      return NextResponse.json({ error: "Conversation unavailable" }, { status: 403 });
     }
 
-    const isMember = conversation.members.some((member: any) => member.userId.toString() === userId);
-    if (!isMember && !user.isAdmin) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    const memberIds = getConversationMemberIds(conversation);
+    const isMember = memberIds.includes(userId);
 
     if (isPresenceConversation) {
+      if (!isMember || user.isAdmin) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+
+      const peerId = memberIds.find((memberId) => memberId !== userId);
+      if (peerId && (await isBlockedBetween(userId, peerId))) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+
+      const currentMember = conversation.members.find((member: any) => member.userId.toString() === userId);
+      const displayName = currentMember?.alias?.trim() || user.displayName || user.username;
+
       return NextResponse.json(
         pusherServer.authorizeChannel(socketId, channelName, {
           user_id: userId,
           user_info: {
-            displayName: user.displayName || user.username,
+            displayName,
             accountType: user.accountType || "registered",
-            isAdmin: Boolean(user.isAdmin),
           },
         }),
       );
+    }
+
+    if (!isMember && !user.isAdmin) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     return NextResponse.json(pusherServer.authorizeChannel(socketId, channelName));
