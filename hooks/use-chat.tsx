@@ -9,6 +9,24 @@ interface PeerTypingState {
   displayName: string;
 }
 
+type ReceiptState = "sent" | "delivered" | "seen";
+
+const RECEIPT_RANK: Record<ReceiptState, number> = {
+  sent: 1,
+  delivered: 2,
+  seen: 3,
+};
+
+function advanceReceipt(current: unknown, next: ReceiptState): ReceiptState {
+  const normalized = current === "seen" || current === "delivered" || current === "sent" ? current : "sent";
+  return RECEIPT_RANK[next] > RECEIPT_RANK[normalized] ? next : normalized;
+}
+
+function isAtOrBeforeCursor(messageId: unknown, cursorId: unknown) {
+  if (!messageId || !cursorId) return false;
+  return messageId.toString() <= cursorId.toString();
+}
+
 export interface ConversationMeta {
   lifecycle: "persistent" | "quick" | "temporary";
   expiresAt: string | null;
@@ -72,6 +90,24 @@ export function useChat(currentUser: any, roomId: string) {
     }
   }, [roomId, userId]);
 
+  const acknowledgeSeen = useCallback(
+    async (messageId?: string | null) => {
+      if (!userId || !roomId || isAdmin) return;
+      if (typeof document !== "undefined" && (document.visibilityState !== "visible" || !document.hasFocus())) return;
+
+      try {
+        await fetch("/api/messages/seen", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roomId, messageId: messageId || undefined }),
+        });
+      } catch {
+        // Delivery state will reconcile from the server on refresh/reconnect.
+      }
+    },
+    [isAdmin, roomId, userId],
+  );
+
   const loadMessages = useCallback(
     async (cursor?: string | null, isLoadMore = false) => {
       if (!userId || !roomId) return;
@@ -83,7 +119,9 @@ export function useChat(currentUser: any, roomId: string) {
         if (isLoadMore) loadingMoreRef.current = true;
         setter(true);
 
-        const res = await fetch(`/api/messages?roomId=${roomId}&cursor=${cursor || ""}&limit=15`);
+        const res = await fetch(`/api/messages?roomId=${encodeURIComponent(roomId)}&cursor=${cursor || ""}&limit=15`, {
+          cache: "no-store",
+        });
         if (!res.ok) throw new Error("fetch failed");
 
         const data = await res.json();
@@ -117,25 +155,25 @@ export function useChat(currentUser: any, roomId: string) {
     setHasMore(true);
     setNextCursor(null);
     void Promise.all([loadMessages(), loadConversationMeta()]);
-  }, [roomId, userId, loadMessages, loadConversationMeta]);
+    void acknowledgeSeen();
+  }, [roomId, userId, loadMessages, loadConversationMeta, acknowledgeSeen]);
 
   useEffect(() => {
-    if (!roomId || !userId) return;
+    if (!roomId || !userId || isAdmin) return;
 
-    const markSeen = async () => {
-      try {
-        await fetch("/api/messages/seen", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomId }),
-        });
-      } catch (err) {
-        console.error("Failed to mark seen", err);
+    const handleForeground = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        void acknowledgeSeen();
       }
     };
 
-    markSeen();
-  }, [roomId, userId]);
+    window.addEventListener("focus", handleForeground);
+    document.addEventListener("visibilitychange", handleForeground);
+    return () => {
+      window.removeEventListener("focus", handleForeground);
+      document.removeEventListener("visibilitychange", handleForeground);
+    };
+  }, [acknowledgeSeen, isAdmin, roomId, userId]);
 
   useEffect(() => {
     if (!roomId || !userId) return;
@@ -145,6 +183,8 @@ export function useChat(currentUser: any, roomId: string) {
     const channel = pusher.subscribe(channelName);
 
     const handleNewMessage = (message: any) => {
+      const fromPeer = message.userId?.toString() !== userId;
+
       setMessages((previous) => {
         if (message.clientMessageId) {
           const optimisticIndex = previous.findIndex(
@@ -156,6 +196,7 @@ export function useChat(currentUser: any, roomId: string) {
             next[optimisticIndex] = {
               ...message,
               deliveryState: "sent",
+              receiptState: message.receiptState || "sent",
               retryPayload: undefined,
             };
             return next;
@@ -163,15 +204,19 @@ export function useChat(currentUser: any, roomId: string) {
         }
 
         if (previous.some((item) => item._id === message._id)) return previous;
-        return [...previous, { ...message, deliveryState: "sent" }];
+        return [...previous, { ...message, deliveryState: "sent", receiptState: message.receiptState || "sent" }];
       });
+
+      if (fromPeer) void acknowledgeSeen(message._id);
     };
 
     const handleMessageDeleted = ({ messageId }: { messageId: string }) => {
       setMessages((prev) =>
         prev.map((msg) => {
           if (msg._id !== messageId) return msg;
-          return isAdminRef.current ? { ...msg, deleted: true } : { ...msg, deleted: true, text: null, imageUrl: null };
+          return isAdminRef.current
+            ? { ...msg, deleted: true }
+            : { ...msg, deleted: true, text: null, imageUrl: null, onceAvailable: false };
         }),
       );
     };
@@ -193,15 +238,30 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
-    const handleMessagesSeen = (data: { userId: string; isAdmin: boolean }) => {
-      if (data.isAdmin) return;
+    const handleMessagesDelivered = (data: { userId: string; messageId?: string | null }) => {
+      if (!data.messageId || data.userId === userId) return;
 
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.userId === data.userId) return msg;
-          const seen = msg.seenBy || [];
-          if (seen.includes(data.userId)) return msg;
-          return { ...msg, seenBy: [...seen, data.userId] };
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.userId?.toString() === userId && isAtOrBeforeCursor(message._id, data.messageId)
+            ? { ...message, receiptState: advanceReceipt(message.receiptState, "delivered") }
+            : message,
+        ),
+      );
+    };
+
+    const handleMessagesSeen = (data: { userId: string; messageId?: string | null; isAdmin: boolean }) => {
+      if (data.isAdmin || !data.messageId || data.userId === userId) return;
+
+      setMessages((previous) =>
+        previous.map((message) => {
+          if (message.userId?.toString() !== userId || !isAtOrBeforeCursor(message._id, data.messageId)) return message;
+          const seen = message.seenBy || [];
+          return {
+            ...message,
+            receiptState: advanceReceipt(message.receiptState, "seen"),
+            seenBy: seen.includes(data.userId) ? seen : [...seen, data.userId],
+          };
         }),
       );
     };
@@ -294,6 +354,7 @@ export function useChat(currentUser: any, roomId: string) {
     channel.bind("new-message", handleNewMessage);
     channel.bind("message-deleted", handleMessageDeleted);
     channel.bind("message-updated", handleMessageUpdated);
+    channel.bind("messages-delivered", handleMessagesDelivered);
     channel.bind("messages-seen", handleMessagesSeen);
     channel.bind("message-reactions", handleReactions);
     channel.bind("typing-changed", handleTypingChanged);
@@ -308,7 +369,7 @@ export function useChat(currentUser: any, roomId: string) {
       channel.unbind_all();
       pusher.unsubscribe(channelName);
     };
-  }, [roomId, userId]);
+  }, [acknowledgeSeen, roomId, userId]);
 
   const loadMoreOlder = useCallback(async () => {
     if (!nextCursor || loadingMoreRef.current || !hasMoreRef.current) return;
