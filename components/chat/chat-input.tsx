@@ -1,33 +1,41 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Paperclip, X, Loader2, Eye } from "lucide-react";
 import Image from "next/image";
 import { compressImage, cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
+import { MessageSendPayload, sendMessageIdempotently } from "@/lib/chat/client";
+import { toast } from "sonner";
 
 const MAX_MESSAGE_LENGTH = 160;
 
 const uploadImageViaApi = async (file: File): Promise<string> => {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch("/api/upload", { method: "POST", body: formData });
-  if (!res.ok) throw new Error("Upload thất bại");
-  const data = await res.json();
+  const response = await fetch("/api/upload", { method: "POST", body: formData });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || "Upload thất bại");
   return data.url;
 };
 
-export default function ChatInput({ roomId }: { roomId: string }) {
+export default function ChatInput({
+  roomId,
+  setMessages,
+}: {
+  roomId: string;
+  setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+}) {
   const { user } = useAuth();
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [imageMode, setImageMode] = useState<"normal" | "once">("normal");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSend = useMemo(() => !user?.isAdmin, [user]);
+  const canSend = useMemo(() => Boolean(user && !user.isAdmin), [user]);
 
   const replacePreview = (nextPreview: string | null) => {
     setPreview((current) => {
@@ -36,15 +44,20 @@ export default function ChatInput({ roomId }: { roomId: string }) {
     });
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
     if (!selectedFile) return;
 
-    let fileToPreview = selectedFile;
-    if (selectedFile.size > 1 * 1024 * 1024) fileToPreview = await compressImage(selectedFile);
+    try {
+      let fileToPreview = selectedFile;
+      if (selectedFile.size > 1 * 1024 * 1024) fileToPreview = await compressImage(selectedFile);
 
-    setFile(fileToPreview);
-    replacePreview(URL.createObjectURL(fileToPreview));
+      setFile(fileToPreview);
+      replacePreview(URL.createObjectURL(fileToPreview));
+    } catch {
+      toast.error("Không thể xử lý ảnh này");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const removeFile = () => {
@@ -53,52 +66,71 @@ export default function ChatInput({ roomId }: { roomId: string }) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const sendMessageRequest = async (payload: Record<string, unknown>) => {
-    return fetch("/api/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  };
+  const send = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!user || !canSend || (!text.trim() && !file) || sending) return;
 
-  const send = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSend || (!text.trim() && !file) || uploading) return;
-
-    setUploading(true);
+    setSending(true);
     const clientMessageId = crypto.randomUUID();
+    const outgoingText = text.trim();
+    const outgoingFile = file;
+    const outgoingMode = outgoingFile ? imageMode : "normal";
+    let optimisticAdded = false;
 
     try {
-      let imageUrl = null;
-      if (file) imageUrl = await uploadImageViaApi(file);
-
-      const payload = {
-        text: text.trim(),
+      const imageUrl = outgoingFile ? await uploadImageViaApi(outgoingFile) : null;
+      const payload: MessageSendPayload = {
+        text: outgoingText,
         roomId,
         imageUrl,
-        imageMode: file ? imageMode : "normal",
+        imageMode: outgoingMode,
         clientMessageId,
       };
 
-      let response: Response;
-      try {
-        response = await sendMessageRequest(payload);
-      } catch {
-        response = await sendMessageRequest(payload);
-      }
+      const optimisticMessage = {
+        _id: `local-${clientMessageId}`,
+        clientMessageId,
+        userId: user._id,
+        username: user.displayName || user.username,
+        text: outgoingText,
+        imageUrl,
+        imageMode: outgoingMode,
+        createdAt: new Date().toISOString(),
+        seenBy: [],
+        deliveryState: "sending",
+        retryPayload: payload,
+      };
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.error || "Gửi tin nhắn thất bại");
-      }
-
+      setMessages((previous) => [...previous, optimisticMessage]);
+      optimisticAdded = true;
       setText("");
       removeFile();
       setImageMode("normal");
+
+      const serverMessage = await sendMessageIdempotently(payload);
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.clientMessageId === clientMessageId
+            ? { ...serverMessage, deliveryState: "sent", retryPayload: undefined }
+            : message,
+        ),
+      );
     } catch (error) {
-      console.error(error);
+      const message = error instanceof Error ? error.message : "Gửi tin nhắn thất bại";
+
+      if (optimisticAdded) {
+        setMessages((previous) =>
+          previous.map((item) =>
+            item.clientMessageId === clientMessageId
+              ? { ...item, deliveryState: "failed", deliveryError: message }
+              : item,
+          ),
+        );
+      } else {
+        toast.error(message);
+      }
     } finally {
-      setUploading(false);
+      setSending(false);
     }
   };
 
@@ -141,12 +173,19 @@ export default function ChatInput({ roomId }: { roomId: string }) {
         )}
 
         <form onSubmit={send} className="flex items-center gap-2 p-2">
-          <input type="file" hidden ref={fileInputRef} onChange={handleFileChange} accept="image/jpeg,image/png,image/webp,image/gif" />
+          <input
+            type="file"
+            hidden
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept="image/jpeg,image/png,image/webp,image/gif"
+          />
 
           <Button
             type="button"
             variant="ghost"
             size="icon"
+            disabled={sending}
             onClick={() => fileInputRef.current?.click()}
             className="h-10 w-10 shrink-0 rounded-2xl text-muted-foreground hover:bg-muted">
             <Paperclip className="w-5 h-5" />
@@ -155,19 +194,19 @@ export default function ChatInput({ roomId }: { roomId: string }) {
           <input
             value={text}
             maxLength={MAX_MESSAGE_LENGTH}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(event) => setText(event.target.value)}
             placeholder={file ? "Thêm ghi chú..." : "Nhập tin nhắn..."}
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 py-2 text-base placeholder:text-muted-foreground/40"
           />
 
           <Button
             type="submit"
-            disabled={uploading || (!text.trim() && !file)}
+            disabled={sending || (!text.trim() && !file)}
             className={cn(
               "h-10 w-10 shrink-0 rounded-2xl transition-all",
               text.trim() || file ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground opacity-50",
             )}>
-            {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+            {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
           </Button>
         </form>
       </div>
