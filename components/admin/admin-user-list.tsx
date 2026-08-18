@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { User as UserIcon, ShieldCheck, Search, Loader2 } from "lucide-react";
+import { User as UserIcon, ShieldCheck, Search, Loader2, Ban, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,11 @@ import { adminGlobalChannel } from "@/lib/realtime/channels";
 interface User {
   _id: string;
   username: string;
+  displayName?: string;
   email?: string;
   isAdmin: boolean;
+  accountType?: "registered" | "guest";
+  status?: "active" | "suspended";
   createdAt: string;
   lastActive?: string;
 }
@@ -27,6 +31,7 @@ export function AdminUserList() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async (pageToLoad: number, isLoadMore = false) => {
     if (!isLoadMore) setLoading(true);
@@ -61,17 +66,51 @@ export function AdminUserList() {
       setUsers((prev) => prev.map((user) => (user._id === data.userId ? { ...user, lastActive: data.lastActive } : user)));
     };
 
+    const handleUserStatus = (data: { userId: string; status: "active" | "suspended" }) => {
+      setUsers((prev) => prev.map((user) => (user._id === data.userId ? { ...user, status: data.status } : user)));
+    };
+
     channel.bind("user-online", handleUserOnline);
+    channel.bind("user-status", handleUserStatus);
     return () => {
       channel.unbind("user-online", handleUserOnline);
+      channel.unbind("user-status", handleUserStatus);
       pusher.unsubscribe(channelName);
     };
   }, []);
 
   const filteredUsers = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    return users.filter((user) => user.username.toLowerCase().includes(query) || user._id.includes(searchQuery));
+    return users.filter(
+      (user) =>
+        user.username.toLowerCase().includes(query) ||
+        user.displayName?.toLowerCase().includes(query) ||
+        user._id.includes(searchQuery),
+    );
   }, [users, searchQuery]);
+
+  const updateStatus = async (user: User, status: "active" | "suspended") => {
+    if (busyUserId || user.isAdmin) return;
+    setBusyUserId(user._id);
+
+    try {
+      const response = await fetch(`/api/admin/users/${user._id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Moderation action failed");
+      setUsers((previous) =>
+        previous.map((item) => (item._id === user._id ? { ...item, status: data.status } : item)),
+      );
+      toast.success(status === "suspended" ? `Đã đình chỉ @${user.username}` : `Đã khôi phục @${user.username}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Moderation action failed");
+    } finally {
+      setBusyUserId(null);
+    }
+  };
 
   if (loading && page === 1) {
     return (
@@ -86,7 +125,7 @@ export function AdminUserList() {
       <div className="flex flex-col gap-4 p-6 pb-4">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Người dùng</h2>
-          <p className="text-sm text-muted-foreground">Quản lý danh sách thực thể và phân quyền hệ thống.</p>
+          <p className="text-sm text-muted-foreground">Quản lý trạng thái tài khoản và hoạt động hệ thống.</p>
         </div>
 
         <div className="relative flex-1 max-w-sm">
@@ -109,12 +148,16 @@ export function AdminUserList() {
                   <tr>
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">Người dùng</th>
                     <th className="h-10 px-4 text-right align-middle font-medium text-muted-foreground">Trạng thái</th>
+                    <th className="h-10 px-4 text-right align-middle font-medium text-muted-foreground">Moderation</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredUsers.map((user) => {
+                    const suspended = user.status === "suspended";
                     const online =
-                      user.lastActive && new Date().getTime() - new Date(user.lastActive).getTime() < 5 * 60 * 1000;
+                      !suspended &&
+                      user.lastActive &&
+                      new Date().getTime() - new Date(user.lastActive).getTime() < 5 * 60 * 1000;
 
                     return (
                       <tr key={user._id} className="border-b transition-colors hover:bg-muted/20">
@@ -127,28 +170,53 @@ export function AdminUserList() {
                                 <UserIcon className="h-4 w-4 text-muted-foreground" />
                               )}
                             </div>
-                            <div className="flex flex-col">
-                              <span className="font-medium text-foreground tracking-tight">{user.username}</span>
-                              <span className="text-[11px] text-muted-foreground">{user.email || "No email"}</span>
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-medium text-foreground tracking-tight truncate">
+                                {user.displayName || user.username}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground truncate">
+                                @{user.username} · {user.accountType || "registered"}
+                              </span>
                             </div>
                           </div>
                         </td>
                         <td className="p-4 align-middle text-right">
                           <div className="flex items-center justify-end gap-2">
-                            <span className="text-xs text-muted-foreground">
-                              {online
-                                ? "Trực tuyến"
-                                : user.lastActive
-                                  ? formatDistanceToNow(new Date(user.lastActive), { addSuffix: true, locale: vi })
-                                  : "Ngoại tuyến"}
+                            <span className={cn("text-xs", suspended ? "text-destructive" : "text-muted-foreground")}>
+                              {suspended
+                                ? "Đã đình chỉ"
+                                : online
+                                  ? "Trực tuyến"
+                                  : user.lastActive
+                                    ? formatDistanceToNow(new Date(user.lastActive), { addSuffix: true, locale: vi })
+                                    : "Ngoại tuyến"}
                             </span>
                             <div
                               className={cn(
                                 "h-1.5 w-1.5 rounded-full",
-                                online ? "bg-green-500" : "bg-muted-foreground/30",
+                                suspended ? "bg-destructive" : online ? "bg-green-500" : "bg-muted-foreground/30",
                               )}
                             />
                           </div>
+                        </td>
+                        <td className="p-4 align-middle text-right">
+                          {!user.isAdmin && (
+                            <Button
+                              variant={suspended ? "outline" : "ghost"}
+                              size="sm"
+                              disabled={busyUserId === user._id}
+                              onClick={() => updateStatus(user, suspended ? "active" : "suspended")}
+                              className={cn("h-7 text-xs gap-1.5", !suspended && "text-destructive hover:text-destructive")}>
+                              {busyUserId === user._id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : suspended ? (
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              ) : (
+                                <Ban className="h-3.5 w-3.5" />
+                              )}
+                              {suspended ? "Khôi phục" : "Đình chỉ"}
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     );
