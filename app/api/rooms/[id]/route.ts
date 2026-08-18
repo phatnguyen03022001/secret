@@ -34,10 +34,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const conversationId = conversation._id.toString();
+  const burnRequestedBy = (conversation.burnRequestedBy || []).map((id: any) => id.toString());
 
   return NextResponse.json({
     roomId: conversationId,
     conversationId,
+    lifecycle: conversation.lifecycle || "persistent",
+    expiresAt: conversation.expiresAt ?? null,
+    burn: {
+      requestedBy: burnRequestedBy,
+      requestedByMe: isMember && burnRequestedBy.includes(userId),
+      requestedByPeer: isMember && burnRequestedBy.some((id: string) => id !== userId),
+    },
     targetUser: {
       _id: targetUser._id,
       username: targetUser.username,
