@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { ensureDirectConversation } from "@/lib/chat/conversations";
+import { ensureDirectConversation, getDirectKey } from "@/lib/chat/conversations";
+import { purgeConversationById } from "@/lib/chat/retention";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
+import Conversation from "@/models/Conversation";
 import User from "@/models/User";
 import mongoose from "mongoose";
 import { z } from "zod";
@@ -46,6 +49,7 @@ export async function POST(req: NextRequest) {
   const targetUser = await User.findOne({
     _id: targetUserId,
     accountType: { $ne: "guest" },
+    status: { $ne: "suspended" },
   });
   if (!targetUser) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -55,8 +59,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const conversation = await ensureDirectConversation(currentUser, targetUser);
+  if (await isBlockedBetween(userId, targetUserId)) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const directKey = getDirectKey(userId, targetUserId);
+  let existingConversation = await Conversation.findOne({ directKey });
+
+  if (existingConversation?.expiresAt && existingConversation.expiresAt.getTime() <= Date.now()) {
+    await purgeConversationById(existingConversation._id.toString(), "expired");
+    existingConversation = null;
+  }
+
+  if (!existingConversation && targetUser.privacy?.allowMessagesFrom === "link_only") {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const conversation = existingConversation || (await ensureDirectConversation(currentUser, targetUser));
   const conversationId = conversation._id.toString();
+  const canSeeLastSeen = currentUser.isAdmin || targetUser.privacy?.showLastSeen !== false;
 
   return NextResponse.json({
     roomId: conversationId,
@@ -67,7 +88,7 @@ export async function POST(req: NextRequest) {
       displayName: targetUser.displayName || targetUser.username,
       accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
-      lastActive: targetUser.lastActive ?? null,
+      lastActive: canSeeLastSeen ? targetUser.lastActive ?? null : null,
     },
   });
 }
