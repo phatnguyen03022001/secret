@@ -6,8 +6,19 @@ import { vi } from "date-fns/locale";
 import { toast } from "sonner";
 import MessageItem from "./message-item";
 import ChatInput from "./chat-input";
-import { Ban, Clock3, Flame, Loader2, ChevronDown, ChevronLeft, History, X } from "lucide-react";
+import {
+  Ban,
+  Clock3,
+  Flame,
+  Loader2,
+  ChevronDown,
+  ChevronLeft,
+  History,
+  UserRoundPen,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useConversationPresence } from "@/hooks/use-presence";
 import type { ReplyPreview } from "@/lib/chat/client";
 import type { ConversationMeta } from "@/hooks/use-chat";
@@ -24,6 +35,7 @@ interface ChatContainerProps {
     _id: string;
     username: string;
     displayName?: string;
+    profileDisplayName?: string;
     accountType?: "registered" | "guest";
     lastActive?: string | null;
   };
@@ -78,19 +90,25 @@ export default function ChatContainer({
   const [replyTarget, setReplyTarget] = useState<ReplyPreview | null>(null);
   const [burnBusy, setBurnBusy] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [identityBusy, setIdentityBusy] = useState(false);
+  const [aliasDraft, setAliasDraft] = useState("");
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
   const hasMarkedSeenRef = useRef<string | null>(null);
   const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
   const lastMessageId = messages[messages.length - 1]?._id;
-  const targetDisplayName = targetUser.displayName || targetUser.username;
+  const profileTargetName = targetUser.profileDisplayName || targetUser.displayName || targetUser.username;
+  const targetDisplayName = conversationMeta?.identity?.peerAlias || targetUser.displayName || targetUser.username;
   const targetIsTyping = peerTyping?.userId === targetUser._id;
   const { peerOnline } = useConversationPresence(roomId, targetUser._id);
   const lifecycleLabel = getLifecycleLabel(conversationMeta);
   const burn = conversationMeta?.burn;
   const access = conversationMeta?.access;
   const messagingBlocked = Boolean(access?.blockedByMe || access?.blockedMe);
+  const canEditIdentity =
+    !readOnly && !currentUser.isAdmin && currentUser.accountType !== "guest" && Boolean(conversationMeta);
 
   const presenceLabel = targetIsTyping
     ? "đang nhập..."
@@ -102,7 +120,15 @@ export default function ChatContainer({
     setReplyTarget(null);
     setBurnBusy(false);
     setBlockBusy(false);
+    setIdentityOpen(false);
+    setIdentityBusy(false);
+    setAliasDraft("");
   }, [roomId]);
+
+  useEffect(() => {
+    if (!identityOpen) return;
+    setAliasDraft(conversationMeta?.identity?.myAlias || "");
+  }, [identityOpen, conversationMeta?.identity?.myAlias]);
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -155,6 +181,41 @@ export default function ChatContainer({
 
   const updateAccessState = (nextAccess: { blockedByMe: boolean; blockedMe: boolean }) => {
     setConversationMeta?.((previous) => (previous ? { ...previous, access: nextAccess } : previous));
+  };
+
+  const saveIdentity = async () => {
+    if (!canEditIdentity || identityBusy) return;
+    const trimmed = aliasDraft.trim();
+    if (trimmed && trimmed.length < 2) {
+      toast.error("Tên trong chat cần ít nhất 2 ký tự");
+      return;
+    }
+
+    setIdentityBusy(true);
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/identity`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias: trimmed || null }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể đổi tên trong chat");
+
+      setConversationMeta?.((previous) =>
+        previous
+          ? {
+              ...previous,
+              identity: { ...previous.identity, myAlias: data.alias || null },
+            }
+          : previous,
+      );
+      setIdentityOpen(false);
+      toast.success(data.alias ? `Đang hiển thị là ${data.alias}` : "Đã dùng lại tên profile trong chat này");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không thể đổi tên trong chat");
+    } finally {
+      setIdentityBusy(false);
+    }
   };
 
   const requestBurn = async () => {
@@ -290,6 +351,9 @@ export default function ChatContainer({
               {targetUser.accountType === "guest" && (
                 <span className="text-[9px] uppercase tracking-wide text-muted-foreground">Guest</span>
               )}
+              {conversationMeta?.identity?.peerAlias && (
+                <span className="hidden sm:inline text-[9px] text-muted-foreground truncate">· {profileTargetName}</span>
+              )}
             </div>
             <p className={`text-[10px] mt-1 truncate ${peerOnline || targetIsTyping ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
               {messagingBlocked ? "Messaging unavailable" : presenceLabel}
@@ -303,6 +367,18 @@ export default function ChatContainer({
               <Clock3 className="h-3 w-3" />
               {lifecycleLabel}
             </span>
+          )}
+          {canEditIdentity && (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={identityBusy}
+              onClick={() => setIdentityOpen((value) => !value)}
+              aria-label="Đổi tên trong chat"
+              title="Tên trong chat"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground">
+              {identityBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserRoundPen className="h-4 w-4" />}
+            </Button>
           )}
           {!readOnly && !currentUser.isAdmin && conversationMeta && !messagingBlocked && (
             <Button
@@ -330,6 +406,52 @@ export default function ChatContainer({
           )}
         </div>
       </header>
+
+      {identityOpen && canEditIdentity && (
+        <div className="border-b border-border/60 bg-muted/10 px-4 py-3">
+          <div className="mx-auto flex max-w-xl flex-col gap-2">
+            <div>
+              <p className="text-xs font-semibold">Tên của bạn trong conversation này</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
+                Chỉ đổi tên hiển thị trong chat này. Username @{currentUser.username} và profile chính không đổi.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={aliasDraft}
+                maxLength={32}
+                disabled={identityBusy}
+                onChange={(event) => setAliasDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveIdentity();
+                  if (event.key === "Escape") setIdentityOpen(false);
+                }}
+                placeholder={currentUser.displayName || currentUser.username}
+                className="h-8 text-xs"
+              />
+              <Button size="sm" className="h-8 text-xs" disabled={identityBusy} onClick={saveIdentity}>
+                {identityBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Lưu"}
+              </Button>
+              {conversationMeta?.identity?.myAlias && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={identityBusy}
+                  onClick={() => {
+                    setAliasDraft("");
+                    queueMicrotask(() => {
+                      const input = document.activeElement as HTMLInputElement | null;
+                      input?.blur();
+                    });
+                  }}>
+                  Reset
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {lifecycleLabel && (
         <div className="sm:hidden px-4 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground flex items-center gap-1.5">
