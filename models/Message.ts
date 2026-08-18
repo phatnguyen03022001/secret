@@ -9,6 +9,14 @@ const ReactionSchema = new Schema(
   { _id: false },
 );
 
+const EditHistorySchema = new Schema(
+  {
+    text: { type: String, default: "" },
+    editedAt: { type: Date, required: true },
+  },
+  { _id: false },
+);
+
 const MessageSchema = new Schema(
   {
     roomId: { type: String, required: true, index: true },
@@ -23,6 +31,8 @@ const MessageSchema = new Schema(
     onceViewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
     reactions: { type: [ReactionSchema], default: [] },
+    editedAt: { type: Date, default: null },
+    editHistory: { type: [EditHistorySchema], default: [] },
     deleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     seenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
