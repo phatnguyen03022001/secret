@@ -7,8 +7,19 @@ import { Loader2, ChevronDown, ChevronLeft, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface ChatContainerProps {
-  currentUser: { _id: string; username: string; isAdmin: boolean };
-  targetUser: { _id: string; username: string };
+  currentUser: {
+    _id: string;
+    username: string;
+    displayName?: string;
+    accountType?: "registered" | "guest";
+    isAdmin: boolean;
+  };
+  targetUser: {
+    _id: string;
+    username: string;
+    displayName?: string;
+    accountType?: "registered" | "guest";
+  };
   roomId: string;
   readOnly?: boolean;
   messages: any[];
@@ -41,6 +52,7 @@ export default function ChatContainer({
   const hasMarkedSeenRef = useRef<string | null>(null);
   const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
   const lastMessageId = messages[messages.length - 1]?._id;
+  const targetDisplayName = targetUser.displayName || targetUser.username;
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -78,10 +90,7 @@ export default function ChatContainer({
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     if (!scrollViewportRef.current) return;
-    scrollViewportRef.current.scrollTo({
-      top: scrollViewportRef.current.scrollHeight,
-      behavior,
-    });
+    scrollViewportRef.current.scrollTo({ top: scrollViewportRef.current.scrollHeight, behavior });
   }, []);
 
   const handleLoadMore = async () => {
@@ -136,10 +145,18 @@ export default function ChatContainer({
             </Button>
           )}
           <div className="h-9 w-9 rounded-full bg-muted border border-border flex items-center justify-center font-bold text-xs shrink-0">
-            {targetUser?.username[0].toUpperCase()}
+            {targetDisplayName.slice(0, 1).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm font-bold truncate leading-none">{targetUser?.username}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold truncate leading-none">{targetDisplayName}</h3>
+              {targetUser.accountType === "guest" && (
+                <span className="text-[9px] uppercase tracking-wide text-muted-foreground">Guest</span>
+              )}
+            </div>
+            {targetUser.displayName && targetUser.displayName !== targetUser.username && targetUser.accountType !== "guest" && (
+              <p className="text-[10px] text-muted-foreground mt-1 truncate">@{targetUser.username}</p>
+            )}
           </div>
         </div>
       </header>
