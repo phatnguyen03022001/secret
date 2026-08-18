@@ -20,6 +20,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (currentUser.accountType === "guest") {
+    return NextResponse.json({ error: "Guest sessions cannot browse or start arbitrary conversations" }, { status: 403 });
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -39,7 +43,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Cannot start chat with yourself" }, { status: 400 });
   }
 
-  const targetUser = await User.findById(targetUserId);
+  const targetUser = await User.findOne({
+    _id: targetUserId,
+    accountType: { $ne: "guest" },
+  });
   if (!targetUser) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
@@ -57,6 +64,8 @@ export async function POST(req: NextRequest) {
     targetUser: {
       _id: targetUser._id,
       username: targetUser.username,
+      displayName: targetUser.displayName || targetUser.username,
+      accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
     },
   });
