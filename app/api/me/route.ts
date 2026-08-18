@@ -12,6 +12,8 @@ export async function GET() {
     return NextResponse.json({
       _id: user._id,
       username: user.username,
+      displayName: user.displayName || user.username,
+      accountType: user.accountType || "registered",
       isAdmin: user.isAdmin,
     });
   } catch {
