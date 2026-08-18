@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { getPusherClient } from "@/lib/client";
+import { conversationChannel } from "@/lib/realtime/channels";
 
 export function useChat(currentUser: any, roomId: string) {
-  /** 🔑 normalize primitive deps */
   const userId = currentUser?._id ?? null;
   const isAdmin = currentUser?.isAdmin ?? false;
 
@@ -14,7 +14,6 @@ export function useChat(currentUser: any, roomId: string) {
   const [hasMore, setHasMore] = useState(true);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
 
-  /** refs */
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
   const isAdminRef = useRef(isAdmin);
@@ -27,11 +26,9 @@ export function useChat(currentUser: any, roomId: string) {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
 
-  /** ---------------- LOAD MESSAGES ---------------- */
   const loadMessages = useCallback(
     async (cursor?: string | null, isLoadMore = false) => {
       if (!userId || !roomId) return;
-
       if (isLoadMore && (loadingMoreRef.current || !hasMoreRef.current)) return;
 
       const setter = isLoadMore ? setLoadingMore : setLoading;
@@ -41,14 +38,12 @@ export function useChat(currentUser: any, roomId: string) {
         setter(true);
 
         const res = await fetch(`/api/messages?roomId=${roomId}&cursor=${cursor || ""}&limit=15`);
-
         if (!res.ok) throw new Error("fetch failed");
 
         const data = await res.json();
 
         setMessages((prev) => {
           if (!isLoadMore) return data.messages || [];
-
           const existingIds = new Set(prev.map((m) => m._id));
           const newMessages = (data.messages || []).filter((m: any) => !existingIds.has(m._id));
           return [...newMessages, ...prev];
@@ -67,18 +62,14 @@ export function useChat(currentUser: any, roomId: string) {
     [userId, roomId],
   );
 
-  /** ---------------- ROOM CHANGE ---------------- */
   useEffect(() => {
     if (!roomId || !userId) return;
-
     setMessages([]);
     setHasMore(true);
     setNextCursor(null);
-
     loadMessages();
   }, [roomId, userId, loadMessages]);
 
-  /** ---------------- MARK SEEN ON ROOM OPEN ---------------- */
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -97,12 +88,12 @@ export function useChat(currentUser: any, roomId: string) {
     markSeen();
   }, [roomId, userId]);
 
-  /** ---------------- PUSHER ---------------- */
   useEffect(() => {
     if (!roomId || !userId) return;
 
     const pusher = getPusherClient();
-    const channel = pusher.subscribe(`chat-${roomId}`);
+    const channelName = conversationChannel(roomId);
+    const channel = pusher.subscribe(channelName);
 
     const handleNewMessage = (msg: any) => {
       setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
@@ -112,7 +103,6 @@ export function useChat(currentUser: any, roomId: string) {
       setMessages((prev) =>
         prev.map((msg) => {
           if (msg._id !== messageId) return msg;
-
           return isAdminRef.current ? { ...msg, deleted: true } : { ...msg, deleted: true, text: null, imageUrl: null };
         }),
       );
@@ -124,10 +114,8 @@ export function useChat(currentUser: any, roomId: string) {
       setMessages((prev) =>
         prev.map((msg) => {
           if (msg.userId === data.userId) return msg;
-
           const seen = msg.seenBy || [];
           if (seen.includes(data.userId)) return msg;
-
           return { ...msg, seenBy: [...seen, data.userId] };
         }),
       );
@@ -139,11 +127,10 @@ export function useChat(currentUser: any, roomId: string) {
 
     return () => {
       channel.unbind_all();
-      pusher.unsubscribe(`chat-${roomId}`);
+      pusher.unsubscribe(channelName);
     };
   }, [roomId, userId]);
 
-  /** ---------------- LOAD MORE ---------------- */
   const loadMoreOlder = useCallback(async () => {
     if (!nextCursor || loadingMoreRef.current || !hasMoreRef.current) return;
     await loadMessages(nextCursor, true);
