@@ -9,6 +9,7 @@ import { z } from "zod";
 const updateSchema = z.object({
   enabled: z.boolean().optional(),
   allowGuests: z.boolean().optional(),
+  lifecycle: z.enum(["persistent", "quick", "temporary"]).optional(),
   rotate: z.boolean().optional(),
 });
 
@@ -18,7 +19,7 @@ function serializeLink(link: any) {
     path: `/chat/${link.slug}`,
     enabled: link.enabled,
     allowGuests: link.allowGuests,
-    lifecycle: link.lifecycle,
+    lifecycle: link.lifecycle || "persistent",
   };
 }
 
@@ -50,7 +51,7 @@ export async function PATCH(req: NextRequest) {
   const rateLimit = await consumeRateLimit({
     scope: "chat-link-settings",
     identifier: user._id.toString(),
-    limit: 12,
+    limit: 20,
     windowSeconds: 60 * 60,
   });
   if (!rateLimit.allowed) {
@@ -75,6 +76,7 @@ export async function PATCH(req: NextRequest) {
   const updates: Record<string, unknown> = {};
   if (typeof parsed.data.enabled === "boolean") updates.enabled = parsed.data.enabled;
   if (typeof parsed.data.allowGuests === "boolean") updates.allowGuests = parsed.data.allowGuests;
+  if (parsed.data.lifecycle) updates.lifecycle = parsed.data.lifecycle;
 
   if (parsed.data.rotate) {
     const base = user.username.toLowerCase().slice(0, 24);
