@@ -90,6 +90,7 @@ function sanitizeMessageForRealtime(message: any, replyPreview?: ReturnType<type
     payload.onceAvailable = true;
   }
   if (replyPreview) payload.replyPreview = replyPreview;
+  payload.receiptState = "sent";
   return payload;
 }
 
@@ -99,6 +100,11 @@ async function getReplyPreviewForMessage(message: any) {
     .select("_id userId username text imageUrl media imageMode deleted")
     .lean();
   return buildReplyPreview(replyTarget);
+}
+
+function isAtOrBeforeCursor(messageId: unknown, cursorId?: unknown) {
+  if (!messageId || !cursorId) return false;
+  return messageId.toString() <= cursorId.toString();
 }
 
 export async function GET(req: NextRequest) {
@@ -147,6 +153,12 @@ export async function GET(req: NextRequest) {
     : [];
   const replyMap = new Map(replyTargets.map((message: any) => [message._id.toString(), message]));
   const viewerId = viewer._id.toString();
+  const viewerIsMember = conversation.members.some((member: any) => member.userId.toString() === viewerId);
+  const peerMember = viewerIsMember
+    ? conversation.members.find((member: any) => member.userId.toString() !== viewerId)
+    : null;
+  const peerDeliveredCursor = peerMember?.lastDeliveredMessageId || null;
+  const peerReadCursor = peerMember?.lastReadMessageId || null;
 
   const processed = messages.map((message: any) => {
     const item = { ...message };
@@ -155,6 +167,13 @@ export async function GET(req: NextRequest) {
     if (!viewer.isAdmin) {
       delete item.editHistory;
       if (item.media) item.media = sanitizeMediaForClient(item.media, false);
+    }
+
+    if (isSender && !viewer.isAdmin) {
+      if (isAtOrBeforeCursor(item._id, peerReadCursor)) item.receiptState = "seen";
+      else if (isAtOrBeforeCursor(item._id, peerDeliveredCursor)) item.receiptState = "delivered";
+      else if ((item.seenBy ?? []).length > 0) item.receiptState = "seen";
+      else item.receiptState = "sent";
     }
 
     if (item.replyTo) {
