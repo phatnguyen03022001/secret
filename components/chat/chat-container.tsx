@@ -28,6 +28,7 @@ interface ChatContainerProps {
   hasMore: boolean;
   loading?: boolean;
   loadingMore?: boolean;
+  peerTyping?: { userId: string; displayName: string } | null;
   onBack?: () => void;
 }
 
@@ -42,6 +43,7 @@ export default function ChatContainer({
   hasMore,
   loading = false,
   loadingMore = false,
+  peerTyping = null,
   onBack,
 }: ChatContainerProps) {
   const scrollViewportRef = useRef<HTMLDivElement>(null);
@@ -53,6 +55,7 @@ export default function ChatContainer({
   const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
   const lastMessageId = messages[messages.length - 1]?._id;
   const targetDisplayName = targetUser.displayName || targetUser.username;
+  const targetIsTyping = peerTyping?.userId === targetUser._id;
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -154,9 +157,13 @@ export default function ChatContainer({
                 <span className="text-[9px] uppercase tracking-wide text-muted-foreground">Guest</span>
               )}
             </div>
-            {targetUser.displayName && targetUser.displayName !== targetUser.username && targetUser.accountType !== "guest" && (
-              <p className="text-[10px] text-muted-foreground mt-1 truncate">@{targetUser.username}</p>
-            )}
+            <p className="text-[10px] text-muted-foreground mt-1 truncate">
+              {targetIsTyping
+                ? "đang nhập..."
+                : targetUser.displayName && targetUser.displayName !== targetUser.username && targetUser.accountType !== "guest"
+                  ? `@${targetUser.username}`
+                  : "Spackie conversation"}
+            </p>
           </div>
         </div>
       </header>
@@ -211,8 +218,13 @@ export default function ChatContainer({
       )}
 
       {!readOnly && (
-        <div className="p-4 border-t border-border bg-background safe-bottom">
-          <ChatInput roomId={roomId} setMessages={setMessages} />
+        <div className="border-t border-border bg-background safe-bottom">
+          <div className="h-5 px-5 pt-1 text-[10px] text-muted-foreground">
+            {targetIsTyping ? `${targetDisplayName} đang nhập...` : ""}
+          </div>
+          <div className="px-4 pb-4">
+            <ChatInput roomId={roomId} setMessages={setMessages} />
+          </div>
         </div>
       )}
     </div>
