@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { migrateLegacyConversationsForUser } from "@/lib/chat/conversations";
+import { maybeRunChatMaintenance } from "@/lib/chat/maintenance";
 import Conversation from "@/models/Conversation";
 import User from "@/models/User";
 
@@ -14,6 +15,9 @@ export async function GET(req: NextRequest) {
   }
 
   await migrateLegacyConversationsForUser(currentUser);
+  await maybeRunChatMaintenance().catch((error) => {
+    console.error("Chat maintenance failed", error);
+  });
 
   const page = Math.max(parseInt(req.nextUrl.searchParams.get("page") || "1", 10), 1);
   const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") || "20", 10), 1), 50);
