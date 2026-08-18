@@ -96,9 +96,7 @@ export default function ChatContainer({
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
-  const hasMarkedSeenRef = useRef<string | null>(null);
   const observedUserId = currentUser.isAdmin ? targetUser._id : currentUser._id;
-  const lastMessageId = messages[messages.length - 1]?._id;
   const profileTargetName = targetUser.profileDisplayName || targetUser.displayName || targetUser.username;
   const targetDisplayName = conversationMeta?.identity?.peerAlias || targetUser.displayName || targetUser.username;
   const targetIsTyping = peerTyping?.userId === targetUser._id;
@@ -129,40 +127,6 @@ export default function ChatContainer({
     if (!identityOpen) return;
     setAliasDraft(conversationMeta?.identity?.myAlias || "");
   }, [identityOpen, conversationMeta?.identity?.myAlias]);
-
-  useEffect(() => {
-    if (!lastMessageId) return;
-    const lastMsg = messages[messages.length - 1];
-    if (!lastMsg) return;
-
-    const isFromOther = lastMsg.userId !== currentUser._id;
-    const alreadySeen = lastMsg.seenBy?.includes(currentUser._id);
-    const shouldMark = isFromOther && !alreadySeen && !currentUser.isAdmin;
-
-    if (!shouldMark || hasMarkedSeenRef.current === lastMsg._id) return;
-    hasMarkedSeenRef.current = lastMsg._id;
-
-    const markAsSeen = async () => {
-      try {
-        const response = await fetch("/api/messages/seen", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomId, messageId: lastMsg._id }),
-        });
-        if (!response.ok) return;
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg._id === lastMsg._id ? { ...msg, seenBy: [...new Set([...(msg.seenBy || []), currentUser._id])] } : msg,
-          ),
-        );
-      } catch (error) {
-        console.error("Failed to mark as seen", error);
-      }
-    };
-
-    markAsSeen();
-  }, [lastMessageId, currentUser._id, currentUser.isAdmin, roomId, setMessages, messages]);
 
   const updateBurnState = (requestedBy: string[]) => {
     setConversationMeta?.((previous) =>
@@ -438,13 +402,7 @@ export default function ChatContainer({
                   size="sm"
                   className="h-8 text-xs"
                   disabled={identityBusy}
-                  onClick={() => {
-                    setAliasDraft("");
-                    queueMicrotask(() => {
-                      const input = document.activeElement as HTMLInputElement | null;
-                      input?.blur();
-                    });
-                  }}>
+                  onClick={() => setAliasDraft("")}>
                   Reset
                 </Button>
               )}
