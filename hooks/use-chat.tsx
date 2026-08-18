@@ -4,6 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { getPusherClient } from "@/lib/client";
 import { conversationChannel } from "@/lib/realtime/channels";
 
+interface PeerTypingState {
+  userId: string;
+  displayName: string;
+}
+
 export function useChat(currentUser: any, roomId: string) {
   const userId = currentUser?._id ?? null;
   const isAdmin = currentUser?.isAdmin ?? false;
@@ -13,10 +18,12 @@ export function useChat(currentUser: any, roomId: string) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [peerTyping, setPeerTyping] = useState<PeerTypingState | null>(null);
 
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
   const isAdminRef = useRef(isAdmin);
+  const typingExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     hasMoreRef.current = hasMore;
@@ -65,6 +72,7 @@ export function useChat(currentUser: any, roomId: string) {
   useEffect(() => {
     if (!roomId || !userId) return;
     setMessages([]);
+    setPeerTyping(null);
     setHasMore(true);
     setNextCursor(null);
     loadMessages();
@@ -140,11 +148,32 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
+    const handleTypingChanged = (data: { userId: string; displayName: string; typing: boolean }) => {
+      if (data.userId === userId) return;
+
+      if (typingExpiryRef.current) clearTimeout(typingExpiryRef.current);
+
+      if (!data.typing) {
+        setPeerTyping(null);
+        typingExpiryRef.current = null;
+        return;
+      }
+
+      setPeerTyping({ userId: data.userId, displayName: data.displayName });
+      typingExpiryRef.current = setTimeout(() => {
+        setPeerTyping(null);
+        typingExpiryRef.current = null;
+      }, 3500);
+    };
+
     channel.bind("new-message", handleNewMessage);
     channel.bind("message-deleted", handleMessageDeleted);
     channel.bind("messages-seen", handleMessagesSeen);
+    channel.bind("typing-changed", handleTypingChanged);
 
     return () => {
+      if (typingExpiryRef.current) clearTimeout(typingExpiryRef.current);
+      setPeerTyping(null);
       channel.unbind_all();
       pusher.unsubscribe(channelName);
     };
@@ -160,6 +189,7 @@ export function useChat(currentUser: any, roomId: string) {
     loading,
     loadingMore,
     hasMore,
+    peerTyping,
     loadMoreOlder,
     setMessages,
   };
