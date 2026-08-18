@@ -13,10 +13,12 @@ import {
   Loader2,
   Info,
   Lock,
+  RotateCcw,
 } from "lucide-react";
 import { useState, useEffect, useRef, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { MessageSendPayload, sendMessageIdempotently } from "@/lib/chat/client";
 
 interface User {
   _id: string;
@@ -26,6 +28,7 @@ interface User {
 
 interface Message {
   _id: string;
+  clientMessageId?: string;
   userId: string;
   text?: string;
   imageUrl?: string | null;
@@ -36,6 +39,9 @@ interface Message {
   deleted?: boolean;
   seenBy?: string[];
   createdAt: string;
+  deliveryState?: "sending" | "sent" | "failed";
+  deliveryError?: string;
+  retryPayload?: MessageSendPayload;
 }
 
 interface Props {
@@ -47,6 +53,7 @@ interface Props {
 
 function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
   const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [openingOnce, setOpeningOnce] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
   const [resolvedOnceUrl, setResolvedOnceUrl] = useState<string | null>(null);
@@ -57,7 +64,10 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
 
   const isOnceImage = message.imageMode === "once";
   const hasBeenSeen = !message.deleted && (message.seenBy?.length ?? 0) > 0;
-  const canDelete = isMe && !currentUser.isAdmin;
+  const isLocalMessage = message._id.startsWith("local-");
+  const deliveryFailed = message.deliveryState === "failed";
+  const deliveryPending = message.deliveryState === "sending" || retrying;
+  const canDelete = isMe && !currentUser.isAdmin && !isLocalMessage && !deliveryFailed;
   const canViewDirectly = isMe || currentUser.isAdmin;
   const alreadyViewed =
     message.onceViewed === true ||
@@ -93,8 +103,43 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
     return () => clearTimers();
   }, []);
 
+  const handleRetry = async () => {
+    if (!message.retryPayload || !message.clientMessageId || retrying) return;
+
+    setRetrying(true);
+    setMessages((previous) =>
+      previous.map((item) =>
+        item.clientMessageId === message.clientMessageId
+          ? { ...item, deliveryState: "sending", deliveryError: undefined }
+          : item,
+      ),
+    );
+
+    try {
+      const serverMessage = await sendMessageIdempotently(message.retryPayload);
+      setMessages((previous) =>
+        previous.map((item) =>
+          item.clientMessageId === message.clientMessageId
+            ? { ...serverMessage, deliveryState: "sent", retryPayload: undefined, deliveryError: undefined }
+            : item,
+        ),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Gửi tin nhắn thất bại";
+      setMessages((previous) =>
+        previous.map((item) =>
+          item.clientMessageId === message.clientMessageId
+            ? { ...item, deliveryState: "failed", deliveryError: errorMessage }
+            : item,
+        ),
+      );
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const handleViewOnceImage = async () => {
-    if (!isOnceImage || alreadyViewed || openingOnce) return;
+    if (!isOnceImage || alreadyViewed || openingOnce || deliveryFailed || isLocalMessage) return;
 
     if (canViewDirectly && message.imageUrl) {
       setShowFullImage(true);
@@ -147,6 +192,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
   };
 
   const handleDelete = async () => {
+    if (!canDelete) return;
     setDeleting(true);
     try {
       const response = await fetch(`/api/messages/${message._id}`, { method: "DELETE" });
@@ -202,7 +248,13 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
                   "w-full max-w-[200px] aspect-[4/3] sm:max-w-[240px]",
                 )}
                 onClick={() => setShowFullImage(true)}>
-                <Image src={message.imageUrl} alt="Chat media" fill className="object-cover transition-transform duration-500 group-hover/img:scale-105" unoptimized />
+                <Image
+                  src={message.imageUrl}
+                  alt="Chat media"
+                  fill
+                  className="object-cover transition-transform duration-500 group-hover/img:scale-105"
+                  unoptimized
+                />
                 <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/10 transition-colors flex items-center justify-center">
                   <ImageIcon className="w-5 h-5 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" />
                 </div>
@@ -247,11 +299,13 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
       <div className={cn("flex group relative w-full mb-3 items-end gap-2", isMe ? "flex-row-reverse" : "flex-row")}>
         <div
           className={cn(
-            "relative p-3.5 px-4 transition-shadow max-w-[85%] sm:max-w-[70%]",
+            "relative p-3.5 px-4 transition-all max-w-[85%] sm:max-w-[70%]",
             isMe
               ? "bg-primary text-primary-foreground rounded-2xl rounded-br-none shadow-sm"
               : "bg-muted text-foreground rounded-2xl rounded-bl-none border border-border shadow-sm",
             message.deleted && "bg-transparent border-dashed border-border/50 shadow-none",
+            deliveryPending && "opacity-70",
+            deliveryFailed && "ring-1 ring-destructive/50 opacity-80",
           )}>
           <RenderContent />
 
@@ -261,10 +315,27 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
             </span>
             {isMe && !message.deleted && (
               <div className="flex items-center">
-                {hasBeenSeen ? <CheckCheck className="w-3 h-3 stroke-[2.5px]" /> : <Check className="w-3 h-3 stroke-[2.5px]" />}
+                {deliveryPending ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : deliveryFailed ? null : hasBeenSeen ? (
+                  <CheckCheck className="w-3 h-3 stroke-[2.5px]" />
+                ) : (
+                  <Check className="w-3 h-3 stroke-[2.5px]" />
+                )}
               </div>
             )}
           </div>
+
+          {isMe && deliveryFailed && message.retryPayload && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={retrying}
+              className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary-foreground underline underline-offset-2 disabled:opacity-50">
+              <RotateCcw className="h-3 w-3" />
+              {retrying ? "Đang thử lại..." : "Không gửi được · Thử lại"}
+            </button>
+          )}
         </div>
 
         {canDelete && !message.deleted && (
