@@ -72,7 +72,7 @@ export function createCloudinaryUploadSignature(userId: string, deliveryType: "u
   const timestamp = Math.floor(Date.now() / 1000);
   const folder = `chat_images/${userId}`;
   const paramsToSign = { folder, timestamp };
-  const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret, "sha256");
+  const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
 
   return {
     cloudName,
