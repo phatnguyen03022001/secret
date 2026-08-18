@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Paperclip, X, Loader2, Eye } from "lucide-react";
+import { Send, Paperclip, X, Loader2, Eye, Reply } from "lucide-react";
 import Image from "next/image";
 import { compressImage, cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
-import { MessageSendPayload, sendMessageIdempotently } from "@/lib/chat/client";
+import { MessageSendPayload, ReplyPreview, sendMessageIdempotently } from "@/lib/chat/client";
 import { toast } from "sonner";
 
 const MAX_MESSAGE_LENGTH = 160;
@@ -24,9 +24,13 @@ const uploadImageViaApi = async (file: File): Promise<string> => {
 export default function ChatInput({
   roomId,
   setMessages,
+  replyTo,
+  onCancelReply,
 }: {
   roomId: string;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
+  replyTo?: ReplyPreview | null;
+  onCancelReply?: () => void;
 }) {
   const { user } = useAuth();
   const [text, setText] = useState("");
@@ -127,6 +131,7 @@ export default function ChatInput({
     const outgoingText = text.trim();
     const outgoingFile = file;
     const outgoingMode = outgoingFile ? imageMode : "normal";
+    const outgoingReply = replyTo ?? null;
     let optimisticAdded = false;
 
     try {
@@ -137,6 +142,7 @@ export default function ChatInput({
         imageUrl,
         imageMode: outgoingMode,
         clientMessageId,
+        replyToId: outgoingReply?.messageId ?? null,
       };
 
       const optimisticMessage = {
@@ -147,6 +153,8 @@ export default function ChatInput({
         text: outgoingText,
         imageUrl,
         imageMode: outgoingMode,
+        replyTo: outgoingReply?.messageId ?? null,
+        replyPreview: outgoingReply,
         createdAt: new Date().toISOString(),
         seenBy: [],
         deliveryState: "sending",
@@ -158,6 +166,7 @@ export default function ChatInput({
       setText("");
       removeFile();
       setImageMode("normal");
+      onCancelReply?.();
 
       const serverMessage = await sendMessageIdempotently(payload);
       setMessages((previous) =>
@@ -190,9 +199,28 @@ export default function ChatInput({
 
   return (
     <div className="w-full">
-      <div className="relative bg-background border border-border/60 rounded-3xl transition-all focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/5">
+      <div className="relative bg-background border border-border/60 rounded-3xl transition-all focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/5 overflow-hidden">
+        {replyTo && (
+          <div className="px-4 py-2.5 border-b border-border/40 bg-muted/20 flex items-center gap-3">
+            <Reply className="h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1 border-l-2 border-primary/50 pl-2.5">
+              <p className="text-[10px] font-semibold text-primary truncate">Trả lời {replyTo.senderName}</p>
+              <p className="text-[11px] text-muted-foreground truncate">{replyTo.content}</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onCancelReply}
+              aria-label="Hủy trả lời"
+              className="h-7 w-7 rounded-full shrink-0">
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+
         {preview && (
-          <div className="p-3 border-b border-border/40 flex items-center gap-4 bg-muted/20 rounded-t-3xl animate-in fade-in slide-in-from-bottom-2">
+          <div className="p-3 border-b border-border/40 flex items-center gap-4 bg-muted/20 animate-in fade-in slide-in-from-bottom-2">
             <div className="relative h-14 w-14 rounded-xl overflow-hidden border border-border">
               <Image src={preview} alt="preview" fill className="object-cover" />
               <button
@@ -247,7 +275,7 @@ export default function ChatInput({
             value={text}
             maxLength={MAX_MESSAGE_LENGTH}
             onChange={(event) => handleTextChange(event.target.value)}
-            placeholder={file ? "Thêm ghi chú..." : "Nhập tin nhắn..."}
+            placeholder={file ? "Thêm ghi chú..." : replyTo ? "Nhập câu trả lời..." : "Nhập tin nhắn..."}
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 py-2 text-base placeholder:text-muted-foreground/40"
           />
 
