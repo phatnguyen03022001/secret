@@ -35,6 +35,7 @@ interface ChatTarget {
   displayName?: string;
   accountType?: "registered" | "guest";
   isAdmin?: boolean;
+  lastActive?: string | null;
 }
 
 export default function HomePage() {
@@ -46,10 +47,18 @@ export default function HomePage() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [targetUser, setTargetUser] = useState<ChatTarget | null>(null);
 
-  const { messages, loading, loadingMore, loadMoreOlder, hasMore, peerTyping, setMessages } = useChat(
-    user,
-    selectedRoomId || "",
-  );
+  const {
+    messages,
+    loading,
+    loadingMore,
+    loadMoreOlder,
+    hasMore,
+    peerTyping,
+    conversationMeta,
+    conversationRemoved,
+    setConversationMeta,
+    setMessages,
+  } = useChat(user, selectedRoomId || "");
   const isMobile = useMediaQuery("(max-width: 767px)");
   const isSidebarOpen = isMobile ? (selectedRoomId ? manualSidebarOpen : true) : true;
   const isGuest = user?.accountType === "guest";
@@ -58,6 +67,13 @@ export default function HomePage() {
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
   }, [user, authLoading, router]);
+
+  useEffect(() => {
+    if (!conversationRemoved) return;
+    setSelectedRoomId(null);
+    setTargetUser(null);
+    if (isMobile) setManualSidebarOpen(true);
+  }, [conversationRemoved, isMobile]);
 
   useEffect(() => {
     if (authLoading || !user || deepLinkHandledRef.current) return;
@@ -192,6 +208,8 @@ export default function HomePage() {
               loading={loading}
               loadingMore={loadingMore}
               peerTyping={peerTyping}
+              conversationMeta={conversationMeta}
+              setConversationMeta={setConversationMeta}
               onBack={handleBackToList}
             />
           </div>
