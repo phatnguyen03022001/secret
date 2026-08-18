@@ -1,4 +1,5 @@
 import "server-only";
+import { randomBytes } from "node:crypto";
 import mongoose from "mongoose";
 import Pusher from "pusher";
 import { v2 as cloudinary } from "cloudinary";
@@ -70,15 +71,16 @@ export const uploadImageToCloudinary = (file: Buffer) =>
 export function createCloudinaryUploadSignature(userId: string, deliveryType: "upload" | "authenticated") {
   const { cloudName, apiKey, apiSecret } = requireCloudinaryConfig();
   const timestamp = Math.floor(Date.now() / 1000);
-  const folder = `chat_images/${userId}`;
-  const paramsToSign = { folder, timestamp };
+  const publicId = `chat_images/${userId}/${randomBytes(16).toString("hex")}`;
+  const paramsToSign = { overwrite: false, public_id: publicId, timestamp };
   const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
 
   return {
     cloudName,
     apiKey,
     timestamp,
-    folder,
+    publicId,
+    overwrite: false as const,
     signature,
     deliveryType,
     uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/${deliveryType}`,
