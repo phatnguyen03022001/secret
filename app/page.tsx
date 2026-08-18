@@ -8,6 +8,7 @@ import ChatContainer from "@/components/chat/chat-container";
 import { UserSearch } from "@/components/chat/user-search";
 import { SpackieLinkCard } from "@/components/chat/spackie-link-card";
 import { GuestClaimCard } from "@/components/chat/guest-claim-card";
+import { ProfileSettingsCard } from "@/components/chat/profile-settings-card";
 import { ModeToggle } from "@/components/mode/mode-toggle";
 import { Loader2, LogOut, MessageSquare, Zap, Shield, Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -173,7 +174,14 @@ export default function HomePage() {
           />
         </div>
 
-        {isGuest ? <GuestClaimCard /> : !user.isAdmin ? <SpackieLinkCard /> : null}
+        {isGuest ? (
+          <GuestClaimCard />
+        ) : !user.isAdmin ? (
+          <>
+            <ProfileSettingsCard />
+            <SpackieLinkCard />
+          </>
+        ) : null}
 
         <div className="p-4 bg-muted/20 border-t border-border/60">
           <div className="flex items-center gap-3 p-2.5 rounded-xl border border-border/50 bg-background/50 shadow-sm">
