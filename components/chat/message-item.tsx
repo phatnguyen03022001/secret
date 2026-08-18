@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Reply,
   SmilePlus,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useRef, memo } from "react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ interface Message {
   onceViewed?: boolean;
   replyPreview?: ReplyPreview | null;
   reactions?: Reaction[];
+  editedAt?: string | null;
   deleted?: boolean;
   seenBy?: string[];
   createdAt: string;
@@ -70,6 +72,10 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   const [retrying, setRetrying] = useState(false);
   const [reacting, setReacting] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(message.text || "");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [openingOnce, setOpeningOnce] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
   const [resolvedOnceUrl, setResolvedOnceUrl] = useState<string | null>(null);
@@ -84,6 +90,7 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   const deliveryFailed = message.deliveryState === "failed";
   const deliveryPending = message.deliveryState === "sending" || retrying;
   const canDelete = isMe && !currentUser.isAdmin && !isLocalMessage && !deliveryFailed;
+  const canEdit = isMe && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed;
   const canReply = Boolean(onReply && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed);
   const canReact = !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed;
   const canViewDirectly = isMe || currentUser.isAdmin;
@@ -137,8 +144,48 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   });
 
   useEffect(() => {
+    if (!editing) setEditText(message.text || "");
+  }, [message.text, editing]);
+
+  useEffect(() => {
     return () => clearTimers();
   }, []);
+
+  const handleSaveEdit = async () => {
+    if (!canEdit || savingEdit) return;
+    const nextText = editText.trim();
+    if (!nextText && !message.imageUrl) {
+      setEditError("Tin nhắn không thể để trống");
+      return;
+    }
+
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const response = await fetch(`/api/messages/${message._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: nextText }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể chỉnh sửa tin nhắn");
+
+      setMessages((previous) =>
+        previous.map((item) => {
+          const next = item._id === message._id ? { ...item, text: data.text, editedAt: data.editedAt } : { ...item };
+          if (next.replyPreview?.messageId === message._id) {
+            next.replyPreview = { ...next.replyPreview, content: data.replyContent };
+          }
+          return next;
+        }),
+      );
+      setEditing(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Không thể chỉnh sửa tin nhắn");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const handleReaction = async (emoji: (typeof REACTION_OPTIONS)[number]) => {
     if (!canReact || reacting) return;
@@ -287,6 +334,55 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
     );
   };
 
+  const RenderText = () => {
+    if (!editing) {
+      return message.text ? <p className="text-[14px] leading-relaxed whitespace-pre-wrap tracking-normal">{message.text}</p> : null;
+    }
+
+    return (
+      <div className="space-y-2 min-w-[220px]">
+        <textarea
+          value={editText}
+          maxLength={160}
+          autoFocus
+          onChange={(event) => setEditText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setEditing(false);
+              setEditError(null);
+            }
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void handleSaveEdit();
+            }
+          }}
+          className="w-full min-h-16 resize-none rounded-lg border border-primary-foreground/20 bg-background/10 px-2.5 py-2 text-sm text-inherit outline-none focus:ring-2 focus:ring-primary-foreground/20"
+        />
+        {editError && <p className="text-[10px] text-destructive-foreground">{editError}</p>}
+        <div className="flex justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setEditText(message.text || "");
+              setEditError(null);
+            }}
+            className="px-2 py-1 text-[10px] font-semibold opacity-70 hover:opacity-100">
+            Hủy
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSaveEdit()}
+            disabled={savingEdit}
+            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-md bg-primary-foreground/15 disabled:opacity-50">
+            {savingEdit && <Loader2 className="h-3 w-3 animate-spin" />}
+            Lưu
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const RenderContent = () => {
     if (message.deleted) {
       if (currentUser.isAdmin) {
@@ -319,7 +415,7 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
     return (
       <div className="space-y-2.5">
         <RenderReplyQuote />
-        {message.text && <p className="text-[14px] leading-relaxed whitespace-pre-wrap tracking-normal">{message.text}</p>}
+        <RenderText />
 
         {(message.imageUrl || isOnceImage) && (
           <div className="pt-0.5">
@@ -397,6 +493,7 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
               <span className="text-[10px] font-medium tracking-tight">
                 {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
+              {message.editedAt && !message.deleted && <span className="text-[9px]">đã sửa</span>}
               {isMe && !message.deleted && (
                 <div className="flex items-center">
                   {deliveryPending ? (
@@ -442,7 +539,7 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
           )}
         </div>
 
-        {(canReply || canDelete || canReact) && (
+        {(canReply || canDelete || canReact || canEdit) && (
           <div className="relative flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             {canReact && (
               <Button
@@ -462,6 +559,20 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
                 aria-label="Trả lời tin nhắn"
                 className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted">
                 <Reply className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setEditing(true);
+                  setShowReactionPicker(false);
+                  setEditError(null);
+                }}
+                aria-label="Chỉnh sửa tin nhắn"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted">
+                <Pencil className="w-3.5 h-3.5" />
               </Button>
             )}
             {canDelete && (
