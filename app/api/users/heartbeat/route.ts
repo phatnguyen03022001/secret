@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, pusherServer } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { adminGlobalChannel } from "@/lib/realtime/channels";
 import User from "@/models/User";
 
 export async function POST(req: NextRequest) {
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    await pusherServer.trigger("admin-global", "user-online", {
+    await pusherServer.trigger(adminGlobalChannel(), "user-online", {
       userId: user._id.toString(),
       username: user.username,
       lastActive: user.lastActive,
