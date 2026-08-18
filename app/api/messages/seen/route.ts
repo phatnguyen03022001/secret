@@ -5,6 +5,7 @@ import {
   getConversationMessageRoomIds,
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
+import { conversationChannel, userChannel } from "@/lib/realtime/channels";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 
@@ -70,13 +71,13 @@ export async function POST(req: NextRequest) {
   if (result.modifiedCount > 0 && !user.isAdmin) {
     const conversationId = conversation._id.toString();
     await Promise.all([
-      pusherServer.trigger(`chat-${conversationId}`, "messages-seen", {
+      pusherServer.trigger(conversationChannel(conversationId), "messages-seen", {
         roomId: conversationId,
         conversationId,
         userId,
         isAdmin: false,
       }),
-      pusherServer.trigger(`user-${userId}`, "unread-updated", {
+      pusherServer.trigger(userChannel(userId), "unread-updated", {
         roomId: conversationId,
         conversationId,
         unreadCount: 0,
