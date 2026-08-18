@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { vi } from "date-fns/locale";
 import MessageItem from "./message-item";
 import ChatInput from "./chat-input";
 import { Loader2, ChevronDown, ChevronLeft, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConversationPresence } from "@/hooks/use-presence";
 
 interface ChatContainerProps {
   currentUser: {
@@ -19,6 +22,7 @@ interface ChatContainerProps {
     username: string;
     displayName?: string;
     accountType?: "registered" | "guest";
+    lastActive?: string | null;
   };
   roomId: string;
   readOnly?: boolean;
@@ -30,6 +34,13 @@ interface ChatContainerProps {
   loadingMore?: boolean;
   peerTyping?: { userId: string; displayName: string } | null;
   onBack?: () => void;
+}
+
+function formatLastSeen(value?: string | null) {
+  if (!value) return "Ngoại tuyến";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Ngoại tuyến";
+  return `Hoạt động ${formatDistanceToNow(date, { addSuffix: true, locale: vi })}`;
 }
 
 export default function ChatContainer({
@@ -56,6 +67,13 @@ export default function ChatContainer({
   const lastMessageId = messages[messages.length - 1]?._id;
   const targetDisplayName = targetUser.displayName || targetUser.username;
   const targetIsTyping = peerTyping?.userId === targetUser._id;
+  const { peerOnline } = useConversationPresence(roomId, targetUser._id);
+
+  const presenceLabel = targetIsTyping
+    ? "đang nhập..."
+    : peerOnline
+      ? "Đang hoạt động"
+      : formatLastSeen(targetUser.lastActive);
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -147,8 +165,11 @@ export default function ChatContainer({
               <ChevronLeft className="w-5 h-5" />
             </Button>
           )}
-          <div className="h-9 w-9 rounded-full bg-muted border border-border flex items-center justify-center font-bold text-xs shrink-0">
+          <div className="relative h-9 w-9 rounded-full bg-muted border border-border flex items-center justify-center font-bold text-xs shrink-0">
             {targetDisplayName.slice(0, 1).toUpperCase()}
+            {peerOnline && (
+              <span className="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-background" />
+            )}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -157,12 +178,8 @@ export default function ChatContainer({
                 <span className="text-[9px] uppercase tracking-wide text-muted-foreground">Guest</span>
               )}
             </div>
-            <p className="text-[10px] text-muted-foreground mt-1 truncate">
-              {targetIsTyping
-                ? "đang nhập..."
-                : targetUser.displayName && targetUser.displayName !== targetUser.username && targetUser.accountType !== "guest"
-                  ? `@${targetUser.username}`
-                  : "Spackie conversation"}
+            <p className={`text-[10px] mt-1 truncate ${peerOnline || targetIsTyping ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+              {presenceLabel}
             </p>
           </div>
         </div>
