@@ -61,6 +61,12 @@ export async function getCurrentSession() {
     return null;
   }
 
+  if (!user.isAdmin && user.status === "suspended") {
+    await Session.deleteMany({ userId: user._id });
+    cookieStore.delete(SESSION_COOKIE);
+    return null;
+  }
+
   return { session, user };
 }
 
