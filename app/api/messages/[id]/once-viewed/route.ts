@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, getCloudinaryProtectedImageUrl } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { findConversationByExternalId } from "@/lib/chat/conversations";
+import { getConversationMemberIds, resolveConversationForUser } from "@/lib/chat/conversations";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import Message from "@/models/Message";
 
 function getProtectedMediaUrl(message: any) {
@@ -35,7 +36,7 @@ function mediaResponse(imageUrl: string | null, extra: Record<string, unknown> =
   );
 }
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await connectDB();
 
   const user = await getCurrentUser();
@@ -51,34 +52,49 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Message not found" }, { status: 404 });
   }
 
-  const conversation = await findConversationByExternalId(message.conversationId?.toString() || message.roomId);
-  if (!conversation) {
-    return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+  if (message.imageMode !== "once") {
+    return NextResponse.json({ error: "Message is not view-once media" }, { status: 400 });
   }
 
-  const isMember = conversation.members.some((member: any) => member.userId.toString() === userId);
+  const conversation = await resolveConversationForUser(
+    message.conversationId?.toString() || message.roomId,
+    user,
+    { allowAdminGodView: true },
+  );
+  if (!conversation) {
+    return NextResponse.json({ error: "Conversation unavailable" }, { status: 404 });
+  }
+
+  const memberIds = getConversationMemberIds(conversation);
+  const isMember = memberIds.includes(userId);
   const isSender = message.userId.toString() === userId;
 
   if (!user.isAdmin && !isMember) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (message.imageMode !== "once") {
-    return mediaResponse(message.imageUrl || null);
-  }
-
   if (user.isAdmin) {
     return mediaResponse(getProtectedMediaUrl(message), { godView: true });
+  }
+
+  if (message.deleted) {
+    return NextResponse.json({ error: "Media unavailable" }, { status: 410 });
   }
 
   if (isSender) {
     return NextResponse.json({ error: "Sender cannot consume view-once media" }, { status: 403 });
   }
 
+  const peerId = memberIds.find((memberId) => memberId !== userId);
+  if (peerId && (await isBlockedBetween(userId, peerId))) {
+    return NextResponse.json({ error: "Media unavailable" }, { status: 403 });
+  }
+
   const consumed = await Message.findOneAndUpdate(
     {
       _id: message._id,
       imageMode: "once",
+      deleted: { $ne: true },
       onceViewedBy: { $ne: user._id },
     },
     { $addToSet: { onceViewedBy: user._id } },
@@ -86,7 +102,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ).select("imageUrl media");
 
   if (!consumed) {
-    return NextResponse.json({ error: "Ảnh này đã được xem" }, { status: 409 });
+    return NextResponse.json({ error: "Ảnh này đã được xem hoặc không còn khả dụng" }, { status: 409 });
   }
 
   return mediaResponse(getProtectedMediaUrl(consumed));
