@@ -59,6 +59,7 @@ function buildReplyPreview(message: any) {
 
 function sanitizeMessageForRealtime(message: any, replyPreview?: ReturnType<typeof buildReplyPreview>) {
   const payload = typeof message.toObject === "function" ? message.toObject() : { ...message };
+  delete payload.editHistory;
   if (payload.imageMode === "once") {
     payload.imageUrl = null;
     payload.onceAvailable = true;
@@ -125,6 +126,8 @@ export async function GET(req: NextRequest) {
   const processed = messages.map((message: any) => {
     const item = { ...message };
     const isSender = item.userId?.toString() === viewerId;
+
+    if (!viewer.isAdmin) delete item.editHistory;
 
     if (item.replyTo) {
       item.replyPreview = buildReplyPreview(replyMap.get(item.replyTo.toString()));
