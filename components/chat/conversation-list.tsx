@@ -11,6 +11,8 @@ interface User {
   _id: string;
   username: string;
   displayName?: string;
+  profileDisplayName?: string;
+  conversationAlias?: string | null;
   accountType?: "registered" | "guest";
   isAdmin?: boolean;
 }
@@ -101,6 +103,7 @@ export function ConversationList({
           const targetRoom = { ...updatedRooms[roomIndex] };
           targetRoom.lastMessage = data.lastMessage;
           targetRoom.unreadCount = isOwnMessage || isOpen ? 0 : (targetRoom.unreadCount || 0) + 1;
+          if (data.otherUser) targetRoom.otherUser = { ...targetRoom.otherUser, ...data.otherUser };
           updatedRooms.splice(roomIndex, 1);
           updatedRooms.unshift(targetRoom);
           return updatedRooms;
@@ -141,16 +144,35 @@ export function ConversationList({
       }
     };
 
+    const handleIdentityUpdated = (data: { conversationId: string; userId: string; alias: string | null }) => {
+      setRooms((previous) =>
+        previous.map((room) => {
+          if (room.roomId !== data.conversationId || room.otherUser._id !== data.userId) return room;
+          const baseName = room.otherUser.profileDisplayName || room.otherUser.username;
+          return {
+            ...room,
+            otherUser: {
+              ...room.otherUser,
+              conversationAlias: data.alias,
+              displayName: data.alias || baseName,
+            },
+          };
+        }),
+      );
+    };
+
     channel.bind("rooms-updated", handleRoomsUpdate);
     channel.bind("unread-updated", handleUnreadUpdate);
     channel.bind("conversation-removed", handleConversationRemoved);
     channel.bind("account-status", handleAccountStatus);
+    channel.bind("identity-updated", handleIdentityUpdated);
 
     return () => {
       channel.unbind("rooms-updated", handleRoomsUpdate);
       channel.unbind("unread-updated", handleUnreadUpdate);
       channel.unbind("conversation-removed", handleConversationRemoved);
       channel.unbind("account-status", handleAccountStatus);
+      channel.unbind("identity-updated", handleIdentityUpdated);
       pusher.unsubscribe(channelName);
     };
   }, [currentUserId, fetchRooms, selectedRoomId]);
