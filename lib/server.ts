@@ -18,7 +18,7 @@ export const connectDB = async () => {
   try {
     cached.conn = await cached.promise;
   } catch (e) {
-    cached.promise = null; // Reset promise để có thể thử lại
+    cached.promise = null;
     throw e;
   }
   return cached.conn;
@@ -49,3 +49,16 @@ export const uploadImageToCloudinary = (file: Buffer) =>
 
     stream.end(file);
   });
+
+export async function deleteImageFromCloudinary(publicId: string) {
+  if (!publicId) return;
+
+  const result = await cloudinary.uploader.destroy(publicId, {
+    resource_type: "image",
+    invalidate: true,
+  });
+
+  if (result?.result !== "ok" && result?.result !== "not found") {
+    throw new Error(`Cloudinary deletion failed for ${publicId}: ${result?.result || "unknown"}`);
+  }
+}
