@@ -3,6 +3,9 @@ import mongoose, { Schema, model, models } from "mongoose";
 const MessageSchema = new Schema(
   {
     roomId: { type: String, required: true, index: true },
+    conversationId: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", default: null, index: true },
+    clientMessageId: { type: String, default: undefined },
+    type: { type: String, enum: ["text", "image"], default: "text" },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     username: { type: String, required: true },
     text: { type: String, default: "" },
@@ -16,10 +19,14 @@ const MessageSchema = new Schema(
   { timestamps: true },
 );
 
-// ✅ Thêm indexes để tăng tốc truy vấn thường dùng
-MessageSchema.index({ roomId: 1, createdAt: -1 }); // Phân trang tin nhắn theo room
-MessageSchema.index({ roomId: 1, seenBy: 1 }); // Tìm tin nhắn chưa đọc
-MessageSchema.index({ userId: 1, createdAt: -1 }); // Lấy tin nhắn của user (nếu cần)
+MessageSchema.index({ roomId: 1, createdAt: -1 });
+MessageSchema.index({ roomId: 1, seenBy: 1 });
+MessageSchema.index({ conversationId: 1, createdAt: -1 });
+MessageSchema.index({ userId: 1, createdAt: -1 });
+MessageSchema.index(
+  { conversationId: 1, userId: 1, clientMessageId: 1 },
+  { unique: true, partialFilterExpression: { clientMessageId: { $exists: true } } },
+);
 
 const Message = models.Message || model("Message", MessageSchema);
 export default Message;
