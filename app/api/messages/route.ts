@@ -8,6 +8,7 @@ import {
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
 import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
 import Conversation from "@/models/Conversation";
 import Message from "@/models/Message";
 import User from "@/models/User";
@@ -101,6 +102,20 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
+
+  const rateLimit = await consumeRateLimit({
+    scope: "message-send",
+    identifier: user._id.toString(),
+    limit: 90,
+    windowSeconds: 60,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Bạn đang gửi tin nhắn quá nhanh." },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
   }
 
   let body: unknown;
