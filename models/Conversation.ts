@@ -36,7 +36,7 @@ const ConversationSchema = new Schema(
 );
 
 ConversationSchema.index({ "members.userId": 1, "lastMessage.createdAt": -1 });
-ConversationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { expiresAt: { $type: "date" } } });
+ConversationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const Conversation = models.Conversation || model("Conversation", ConversationSchema);
 export default Conversation;
