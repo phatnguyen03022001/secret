@@ -10,6 +10,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 interface User {
   _id: string;
   username: string;
+  displayName?: string;
+  accountType?: "registered" | "guest";
   isAdmin?: boolean;
 }
 
@@ -172,6 +174,7 @@ export function ConversationList({
             rooms.map((room) => {
               const isActive = selectedRoomId === room.roomId;
               const unread = room.unreadCount ?? 0;
+              const displayName = room.otherUser?.displayName || room.otherUser?.username;
               const lastTime = room.lastMessage?.createdAt
                 ? new Date(room.lastMessage.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })
                 : "";
@@ -200,8 +203,13 @@ export function ConversationList({
                     <div className="flex justify-between items-center mb-0.5">
                       <div className="flex items-center gap-2 overflow-hidden">
                         <p className={cn("text-xs font-bold truncate", isActive ? "text-primary-foreground" : "text-foreground")}>
-                          {room.otherUser?.username}
+                          {displayName}
                         </p>
+                        {room.otherUser?.accountType === "guest" && (
+                          <span className={cn("text-[8px] uppercase tracking-wide opacity-60", isActive && "text-primary-foreground")}>
+                            Guest
+                          </span>
+                        )}
                         {unread > 0 && (
                           <span
                             className={cn(
