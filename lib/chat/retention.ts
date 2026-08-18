@@ -11,12 +11,17 @@ import User from "@/models/User";
 
 export type ConversationPurgeReason = "expired" | "burned" | "admin";
 
-async function deleteCloudinaryAssets(publicIds: string[]) {
+type MediaAssetRef = {
+  publicId: string;
+  deliveryType: "upload" | "authenticated";
+};
+
+async function deleteCloudinaryAssets(assets: MediaAssetRef[]) {
   const batchSize = 8;
 
-  for (let index = 0; index < publicIds.length; index += batchSize) {
-    const batch = publicIds.slice(index, index + batchSize);
-    await Promise.all(batch.map((publicId) => deleteImageFromCloudinary(publicId)));
+  for (let index = 0; index < assets.length; index += batchSize) {
+    const batch = assets.slice(index, index + batchSize);
+    await Promise.all(batch.map((asset) => deleteImageFromCloudinary(asset.publicId, asset.deliveryType)));
   }
 }
 
@@ -45,19 +50,32 @@ export async function purgeConversationById(conversationId: string, reason: Conv
   const messages = await Message.find({
     $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
   })
-    .select("_id imageUrl")
+    .select("_id imageUrl media.publicId media.deliveryType")
     .lean();
 
-  const publicIds = [
-    ...new Set(
-      messages
-        .map((message: any) => (message.imageUrl ? getManagedCloudinaryPublicId(message.imageUrl) : null))
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
+  const assetMap = new Map<string, MediaAssetRef>();
+  for (const message of messages as any[]) {
+    if (message.media?.publicId) {
+      const deliveryType = message.media.deliveryType === "authenticated" ? "authenticated" : "upload";
+      assetMap.set(`${deliveryType}:${message.media.publicId}`, {
+        publicId: message.media.publicId,
+        deliveryType,
+      });
+      continue;
+    }
+
+    if (message.imageUrl) {
+      const legacyPublicId = getManagedCloudinaryPublicId(message.imageUrl);
+      if (legacyPublicId) {
+        assetMap.set(`upload:${legacyPublicId}`, { publicId: legacyPublicId, deliveryType: "upload" });
+      }
+    }
+  }
+
+  const assets = [...assetMap.values()];
 
   // External media is deleted first. A retry is safe because Cloudinary "not found" is accepted.
-  await deleteCloudinaryAssets(publicIds);
+  await deleteCloudinaryAssets(assets);
 
   await Message.deleteMany({
     $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
@@ -77,7 +95,7 @@ export async function purgeConversationById(conversationId: string, reason: Conv
     alreadyGone: false,
     conversationId,
     deletedMessages: messages.length,
-    deletedMedia: publicIds.length,
+    deletedMedia: assets.length,
   };
 }
 
