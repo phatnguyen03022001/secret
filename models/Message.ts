@@ -12,6 +12,7 @@ const MessageSchema = new Schema(
     imageUrl: { type: String, default: null },
     imageMode: { type: String, enum: ["normal", "once"], default: "normal" },
     onceViewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
     deleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     seenBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
