@@ -1,12 +1,23 @@
 "use client";
 
 import Image from "next/image";
-import { Trash2, X, ImageIcon, Clock, Check, CheckCheck, ShieldAlert, EyeOff, Loader2, Info, Lock } from "lucide-react";
+import {
+  Trash2,
+  X,
+  ImageIcon,
+  Clock,
+  Check,
+  CheckCheck,
+  ShieldAlert,
+  EyeOff,
+  Loader2,
+  Info,
+  Lock,
+} from "lucide-react";
 import { useState, useEffect, useRef, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/* ---------------- Types ---------------- */
 interface User {
   _id: string;
   username: string;
@@ -20,6 +31,8 @@ interface Message {
   imageUrl?: string | null;
   imageMode?: "normal" | "once";
   onceViewedBy?: string[];
+  onceAvailable?: boolean;
+  onceViewed?: boolean;
   deleted?: boolean;
   seenBy?: string[];
   createdAt: string;
@@ -34,66 +47,111 @@ interface Props {
 
 function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
   const [deleting, setDeleting] = useState(false);
+  const [openingOnce, setOpeningOnce] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
-  const [imageOpened, setImageOpened] = useState(false);
+  const [resolvedOnceUrl, setResolvedOnceUrl] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const isOnceImage = message.imageMode === "once" && !!message.imageUrl;
+  const isOnceImage = message.imageMode === "once";
   const hasBeenSeen = !message.deleted && (message.seenBy?.length ?? 0) > 0;
-
-  // Admin không xóa, chỉ chủ sở hữu xóa
   const canDelete = isMe && !currentUser.isAdmin;
   const canViewDirectly = isMe || currentUser.isAdmin;
-  const alreadyViewed = !canViewDirectly && (message.onceViewedBy?.includes(currentUser._id) ?? false);
+  const alreadyViewed =
+    message.onceViewed === true ||
+    (!canViewDirectly && (message.onceViewedBy?.includes(currentUser._id) ?? false)) ||
+    (!canViewDirectly && message.onceAvailable === false);
+  const displayImageUrl = resolvedOnceUrl || message.imageUrl || null;
+
+  const clearTimers = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    timerRef.current = null;
+    intervalRef.current = null;
+  };
+
+  const markOnceExpiredLocally = () => {
+    setResolvedOnceUrl(null);
+    setMessages((prev) =>
+      prev.map((item) =>
+        item._id === message._id
+          ? {
+              ...item,
+              imageUrl: null,
+              onceAvailable: false,
+              onceViewed: true,
+              onceViewedBy: [...new Set([...(item.onceViewedBy || []), currentUser._id])],
+            }
+          : item,
+      ),
+    );
+  };
 
   useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => clearTimers();
   }, []);
 
-  /* ---------------- Handlers ---------------- */
   const handleViewOnceImage = async () => {
-    if (!message.imageUrl || alreadyViewed || imageOpened) return;
-    setImageOpened(true);
-    setShowFullImage(true);
+    if (!isOnceImage || alreadyViewed || openingOnce) return;
 
-    if (currentUser.isAdmin) return;
+    if (canViewDirectly && message.imageUrl) {
+      setShowFullImage(true);
+      return;
+    }
 
-    setTimeLeft(5);
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((prev) => (prev && prev > 1 ? prev - 1 : 0));
-    }, 1000);
+    setOpeningOnce(true);
+    try {
+      const response = await fetch(`/api/messages/${message._id}/once-viewed`, { method: "POST" });
+      if (!response.ok) {
+        markOnceExpiredLocally();
+        return;
+      }
 
-    timerRef.current = setTimeout(async () => {
-      setShowFullImage(false);
-      setTimeLeft(null);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m._id === message._id ? { ...m, onceViewedBy: [...(m.onceViewedBy || []), currentUser._id] } : m,
-        ),
-      );
-      await fetch(`/api/messages/${message._id}/once-viewed`, { method: "POST" }).catch();
-    }, 5000);
+      const data = await response.json();
+      if (!data.imageUrl) {
+        markOnceExpiredLocally();
+        return;
+      }
+
+      setResolvedOnceUrl(data.imageUrl);
+      setShowFullImage(true);
+      setTimeLeft(5);
+
+      intervalRef.current = setInterval(() => {
+        setTimeLeft((previous) => (previous && previous > 1 ? previous - 1 : 0));
+      }, 1000);
+
+      timerRef.current = setTimeout(() => {
+        clearTimers();
+        setShowFullImage(false);
+        setTimeLeft(null);
+        markOnceExpiredLocally();
+      }, 5000);
+    } catch {
+      markOnceExpiredLocally();
+    } finally {
+      setOpeningOnce(false);
+    }
   };
 
   const handleCloseModal = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    clearTimers();
     setShowFullImage(false);
     setTimeLeft(null);
+
+    if (isOnceImage && !canViewDirectly && resolvedOnceUrl) {
+      markOnceExpiredLocally();
+    }
   };
 
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const res = await fetch(`/api/messages/${message._id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error();
-      setMessages((prev) => prev.map((m) => (m._id === message._id ? { ...m, deleted: true } : m)));
+      const response = await fetch(`/api/messages/${message._id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error();
+      setMessages((prev) => prev.map((item) => (item._id === message._id ? { ...item, deleted: true } : item)));
     } catch {
       console.error("Failed to revoke message");
     } finally {
@@ -101,7 +159,6 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
     }
   };
 
-  /* ---------------- Sub-components ---------------- */
   const RenderContent = () => {
     if (message.deleted) {
       if (currentUser.isAdmin) {
@@ -122,6 +179,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
           </div>
         );
       }
+
       return (
         <div className="flex items-center gap-2 text-muted-foreground/60 py-0.5 select-none">
           <EyeOff className="w-3.5 h-3.5" />
@@ -132,57 +190,51 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
 
     return (
       <div className="space-y-2.5">
-        {message.text && (
-          <p className="text-[14px] leading-relaxed whitespace-pre-wrap tracking-normal">{message.text}</p>
-        )}
+        {message.text && <p className="text-[14px] leading-relaxed whitespace-pre-wrap tracking-normal">{message.text}</p>}
 
-        {message.imageUrl && (
+        {(message.imageUrl || isOnceImage) && (
           <div className="pt-0.5">
-            {!isOnceImage || canViewDirectly ? (
-              /* ĐIỀU CHỈNH: Giới hạn kích thước ảnh preview */
+            {!isOnceImage && message.imageUrl ? (
               <div
                 className={cn(
                   "relative overflow-hidden cursor-pointer group/img transition-all hover:ring-2 hover:ring-primary/20",
                   "rounded-lg border border-border bg-muted",
-                  "w-full max-w-[200px] aspect-[4/3] sm:max-w-[240px]", // Ảnh nhỏ gọn lại ở đây
+                  "w-full max-w-[200px] aspect-[4/3] sm:max-w-[240px]",
                 )}
                 onClick={() => setShowFullImage(true)}>
-                <Image
-                  src={message.imageUrl}
-                  alt="Chat media"
-                  fill // Dùng fill để ảnh lấp đầy khung cố định
-                  className="object-cover transition-transform duration-500 group-hover/img:scale-105"
-                  unoptimized
-                />
-
-                {isOnceImage && (
-                  <div className="absolute top-1.5 left-1.5 bg-background/90 backdrop-blur-sm text-[8px] font-bold px-1.5 py-0.5 rounded border border-border uppercase">
-                    Xem một lần
-                  </div>
-                )}
-
-                {/* Overlay kính lúp khi hover cho cảm giác chuyên nghiệp */}
+                <Image src={message.imageUrl} alt="Chat media" fill className="object-cover transition-transform duration-500 group-hover/img:scale-105" unoptimized />
                 <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/10 transition-colors flex items-center justify-center">
                   <ImageIcon className="w-5 h-5 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" />
                 </div>
               </div>
-            ) : (
-              <div className="mt-1">
-                {alreadyViewed ? (
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded-md border border-border">
-                    <Info className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="text-xs font-medium text-muted-foreground">Ảnh đã hết hạn</span>
-                  </div>
-                ) : (
-                  <Button
-                    variant="secondary"
-                    onClick={handleViewOnceImage}
-                    className="h-10 w-full max-w-[200px] rounded-lg gap-2 border border-primary/10 transition-all hover:bg-primary/5 active:scale-95">
-                    <ImageIcon className="w-4 h-4 text-primary" />
-                    <span className="text-xs font-semibold">Xem ảnh bảo mật</span>
-                  </Button>
-                )}
+            ) : canViewDirectly && message.imageUrl ? (
+              <div
+                className="relative overflow-hidden cursor-pointer rounded-lg border border-border bg-muted w-full max-w-[200px] aspect-[4/3] sm:max-w-[240px]"
+                onClick={() => setShowFullImage(true)}>
+                <Image src={message.imageUrl} alt="View once media" fill className="object-cover" unoptimized />
+                <div className="absolute top-1.5 left-1.5 bg-background/90 backdrop-blur-sm text-[8px] font-bold px-1.5 py-0.5 rounded border border-border uppercase">
+                  Xem một lần
+                </div>
               </div>
+            ) : isMe ? (
+              <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-primary-foreground/20 bg-primary-foreground/10">
+                <ImageIcon className="w-4 h-4" />
+                <span className="text-xs font-semibold">Đã gửi ảnh xem một lần</span>
+              </div>
+            ) : alreadyViewed ? (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded-md border border-border">
+                <Info className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-muted-foreground">Ảnh đã hết hạn</span>
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
+                onClick={handleViewOnceImage}
+                disabled={openingOnce}
+                className="h-10 w-full max-w-[200px] rounded-lg gap-2 border border-primary/10 transition-all hover:bg-primary/5 active:scale-95">
+                {openingOnce ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4 text-primary" />}
+                <span className="text-xs font-semibold">{openingOnce ? "Đang mở..." : "Xem ảnh một lần"}</span>
+              </Button>
             )}
           </div>
         )}
@@ -209,11 +261,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
             </span>
             {isMe && !message.deleted && (
               <div className="flex items-center">
-                {hasBeenSeen ? (
-                  <CheckCheck className="w-3 h-3 stroke-[2.5px]" />
-                ) : (
-                  <Check className="w-3 h-3 stroke-[2.5px]" />
-                )}
+                {hasBeenSeen ? <CheckCheck className="w-3 h-3 stroke-[2.5px]" /> : <Check className="w-3 h-3 stroke-[2.5px]" />}
               </div>
             )}
           </div>
@@ -231,26 +279,20 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
         )}
       </div>
 
-      {showFullImage && message.imageUrl && (
+      {showFullImage && displayImageUrl && (
         <div
           className="fixed inset-0 z-100 bg-background/95 backdrop-blur-sm flex flex-col animate-in fade-in duration-200"
           onClick={handleCloseModal}>
           <div className="p-4 flex justify-end">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleCloseModal}
-              className="h-10 w-10 rounded-full hover:bg-muted">
+            <Button variant="ghost" size="icon" onClick={handleCloseModal} className="h-10 w-10 rounded-full hover:bg-muted">
               <X className="w-5 h-5" />
             </Button>
           </div>
 
-          <div
-            className="flex-1 flex flex-col items-center justify-center p-4 gap-6"
-            onClick={(e) => e.stopPropagation()}>
+          <div className="flex-1 flex flex-col items-center justify-center p-4 gap-6" onClick={(event) => event.stopPropagation()}>
             <div className="relative max-w-4xl w-full bg-card rounded-xl overflow-hidden shadow-2xl border border-border">
               <Image
-                src={message.imageUrl}
+                src={displayImageUrl}
                 alt="Fullscreen"
                 width={1200}
                 height={1200}
@@ -272,7 +314,7 @@ function MessageItem({ message, isMe, currentUser, setMessages }: Props) {
                       : "bg-muted text-foreground",
                   )}>
                   <Clock className={cn("w-3.5 h-3.5", timeLeft <= 2 && "animate-pulse")} />
-                  Ảnh tự xóa sau: {timeLeft}s
+                  Ảnh tự đóng sau: {timeLeft}s
                 </div>
               )}
 
