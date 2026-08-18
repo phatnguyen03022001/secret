@@ -44,8 +44,8 @@ export function useChat(currentUser: any, roomId: string) {
 
         setMessages((prev) => {
           if (!isLoadMore) return data.messages || [];
-          const existingIds = new Set(prev.map((m) => m._id));
-          const newMessages = (data.messages || []).filter((m: any) => !existingIds.has(m._id));
+          const existingIds = new Set(prev.map((message) => message._id));
+          const newMessages = (data.messages || []).filter((message: any) => !existingIds.has(message._id));
           return [...newMessages, ...prev];
         });
 
@@ -95,8 +95,27 @@ export function useChat(currentUser: any, roomId: string) {
     const channelName = conversationChannel(roomId);
     const channel = pusher.subscribe(channelName);
 
-    const handleNewMessage = (msg: any) => {
-      setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
+    const handleNewMessage = (message: any) => {
+      setMessages((previous) => {
+        if (message.clientMessageId) {
+          const optimisticIndex = previous.findIndex(
+            (item) => item.clientMessageId && item.clientMessageId === message.clientMessageId,
+          );
+
+          if (optimisticIndex !== -1) {
+            const next = [...previous];
+            next[optimisticIndex] = {
+              ...message,
+              deliveryState: "sent",
+              retryPayload: undefined,
+            };
+            return next;
+          }
+        }
+
+        if (previous.some((item) => item._id === message._id)) return previous;
+        return [...previous, { ...message, deliveryState: "sent" }];
+      });
     };
 
     const handleMessageDeleted = ({ messageId }: { messageId: string }) => {
