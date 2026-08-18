@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import AuthForm from "@/components/auth/auth-form";
 import { useAuth } from "@/context/AuthContext";
-import { Loader2, ShieldCheck, Lock, Fingerprint } from "lucide-react";
+import { Loader2, Link2, MessageCircle } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,73 +19,58 @@ export default function LoginPage() {
   if (loading) {
     return (
       <div className="h-dvh w-full flex flex-col items-center justify-center bg-background">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="mt-4 text-[10px] font-black tracking-[0.3em] text-foreground uppercase">Verifying Session...</p>
+        <Loader2 className="w-7 h-7 animate-spin text-primary/60" />
+        <p className="mt-4 text-xs font-medium text-muted-foreground">Đang kiểm tra phiên đăng nhập...</p>
       </div>
     );
   }
 
   return (
-    <main className="h-dvh w-full flex flex-col items-center justify-center bg-background px-4 relative overflow-hidden">
-      {/* --- HIGH CONTRAST BACKGROUND --- */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-        {/* Lớp lưới sắc nét hơn, sử dụng trực tiếp màu border */}
-        <div
-          className="absolute inset-0 opacity-[0.4] dark:opacity-[0.6]"
-          style={{
-            backgroundImage: `linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)`,
-            backgroundSize: "50px 50px",
-          }}
-        />
+    <main className="h-dvh w-full overflow-y-auto bg-background">
+      <div className="min-h-full grid lg:grid-cols-[1.05fr_0.95fr]">
+        <section className="hidden lg:flex flex-col justify-between p-12 xl:p-16 border-r border-border bg-muted/20">
+          <div className="inline-flex items-center gap-2 text-sm font-semibold">
+            <div className="h-9 w-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center">
+              <MessageCircle className="h-4 w-4" />
+            </div>
+            Spackie
+          </div>
 
-        {/* Hiệu ứng mờ dần (Vignette) để tập trung vào trung tâm */}
-        <div className="absolute inset-0 bg-background [mask-image:radial-gradient(ellipse_at_center,transparent_20%,black_85%)]" />
-      </div>
+          <div className="max-w-lg space-y-5">
+            <p className="text-sm font-semibold text-primary">Talk first. Connect later.</p>
+            <h1 className="text-5xl font-semibold tracking-tight leading-[1.08]">
+              Nhắn trước. Chia sẻ social sau.
+            </h1>
+            <p className="text-base text-muted-foreground leading-relaxed max-w-md">
+              Dùng Spackie Link để bắt đầu một cuộc trò chuyện mà chưa cần trao đổi số điện thoại, Facebook hay Zalo.
+            </p>
+          </div>
 
-      <div className="relative z-10 w-full max-w-[420px] flex flex-col items-stretch">
-        {/* Header Section: Chữ lớn, tương phản mạnh */}
-        <div className="mb-10 flex flex-col items-center text-center">
-          <div className="relative mb-6">
-            {/* Vòng tròn trang trí quanh Icon */}
-            <div className="absolute inset-0 rounded-full border border-primary/20 scale-150 animate-[ping_3s_infinite]" />
-            <div className="relative w-16 h-16 rounded-2xl bg-foreground flex items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(255,255,255,0.05)]">
-              <Fingerprint className="text-background w-8 h-8 stroke-[1.5px]" />
+          <div className="flex items-start gap-3 text-sm text-muted-foreground max-w-md">
+            <Link2 className="h-4 w-4 mt-0.5 shrink-0" />
+            <p>Nếu bạn nhận được một Spackie Link, bạn có thể trả lời dưới dạng guest mà không cần tạo tài khoản.</p>
+          </div>
+        </section>
+
+        <section className="flex items-center justify-center px-5 py-10 sm:px-8">
+          <div className="w-full max-w-md">
+            <div className="lg:hidden mb-10 inline-flex items-center gap-2 text-sm font-semibold">
+              <div className="h-9 w-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center">
+                <MessageCircle className="h-4 w-4" />
+              </div>
+              Spackie
+            </div>
+
+            <div className="mb-7 space-y-2">
+              <h2 className="text-2xl font-semibold tracking-tight">Đăng nhập vào Spackie</h2>
+              <p className="text-sm text-muted-foreground">Quản lý inbox và Spackie Link của bạn.</p>
+            </div>
+
+            <div className="rounded-3xl border border-border bg-card p-6 sm:p-7 shadow-sm">
+              <AuthForm />
             </div>
           </div>
-
-          <h1 className="text-4xl font-black tracking-tighter text-foreground italic uppercase">
-            Spackie<span className="text-primary not-italic">.</span>
-          </h1>
-          <div className="mt-2 h-px w-12 bg-primary mx-auto" />
-          <p className="text-[10px] text-muted-foreground mt-4 font-bold uppercase tracking-[0.4em]">
-            Encrypted Gateway
-          </p>
-        </div>
-
-        {/* Auth Card: Border dày và đổ bóng sắc nét */}
-        <div className="bg-card border-2 border-foreground p-8 md:p-10 rounded-none shadow-[12px_12px_0px_0px_var(--primary)] relative transition-all">
-          <AuthForm />
-
-          {/* Một nhãn nhỏ trang trí ở góc */}
-          <div className="absolute -top-3 -right-3 bg-primary text-primary-foreground text-[10px] font-black px-2 py-1 uppercase tracking-tighter">
-            Secure v2
-          </div>
-        </div>
-
-        {/* Footer: Badge dạng Terminal */}
-        <div className="mt-12 flex flex-col items-center gap-4">
-          <div className="flex items-center gap-3 py-2 px-6 border border-foreground/10 bg-muted/50 rounded-none">
-            <ShieldCheck className="w-4 h-4 text-primary" />
-            <span className="text-[9px] font-black uppercase tracking-[0.2em] text-foreground">
-              End-to-End Encryption : Active
-            </span>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <span className="text-[8px] text-muted-foreground/50 font-mono">STATUS: 200 OK</span>
-            <span className="text-[8px] text-muted-foreground/50 font-mono">NODE: SG-01</span>
-          </div>
-        </div>
+        </section>
       </div>
     </main>
   );
