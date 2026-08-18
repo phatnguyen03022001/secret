@@ -18,6 +18,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const userId = user._id.toString();
   const isMember = conversation.members.some((member: any) => member.userId.toString() === userId);
+  const currentMember = isMember
+    ? conversation.members.find((member: any) => member.userId.toString() === userId)
+    : null;
   const targetMember = isMember
     ? conversation.members.find((member: any) => member.userId.toString() !== userId)
     : conversation.members[0];
@@ -40,6 +43,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     ? await getBlockState(userId, targetUser._id.toString())
     : { blockedByMe: false, blockedMe: false };
   const canSeeLastSeen = user.isAdmin || targetUser.privacy?.showLastSeen !== false;
+  const peerAlias = targetMember.alias?.trim() || null;
 
   return NextResponse.json({
     roomId: conversationId,
@@ -52,10 +56,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       requestedByPeer: isMember && burnRequestedBy.some((memberId: string) => memberId !== userId),
     },
     access: blockState,
+    identity: {
+      myAlias: currentMember?.alias?.trim() || null,
+      peerAlias,
+    },
     targetUser: {
       _id: targetUser._id,
       username: targetUser.username,
-      displayName: targetUser.displayName || targetUser.username,
+      displayName: peerAlias || targetUser.displayName || targetUser.username,
+      profileDisplayName: targetUser.displayName || targetUser.username,
       accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
       lastActive: canSeeLastSeen ? targetUser.lastActive ?? null : null,
