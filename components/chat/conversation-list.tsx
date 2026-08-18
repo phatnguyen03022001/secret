@@ -135,14 +135,22 @@ export function ConversationList({
       setRooms((previous) => previous.filter((room) => room.roomId !== id));
     };
 
+    const handleAccountStatus = (data: { userId: string; status: "active" | "suspended" }) => {
+      if (data.userId === currentUserId && data.status === "suspended") {
+        window.location.assign("/login");
+      }
+    };
+
     channel.bind("rooms-updated", handleRoomsUpdate);
     channel.bind("unread-updated", handleUnreadUpdate);
     channel.bind("conversation-removed", handleConversationRemoved);
+    channel.bind("account-status", handleAccountStatus);
 
     return () => {
       channel.unbind("rooms-updated", handleRoomsUpdate);
       channel.unbind("unread-updated", handleUnreadUpdate);
       channel.unbind("conversation-removed", handleConversationRemoved);
+      channel.unbind("account-status", handleAccountStatus);
       pusher.unsubscribe(channelName);
     };
   }, [currentUserId, fetchRooms, selectedRoomId]);
