@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Paperclip, X, Loader2, Eye } from "lucide-react";
 import Image from "next/image";
@@ -10,6 +10,7 @@ import { MessageSendPayload, sendMessageIdempotently } from "@/lib/chat/client";
 import { toast } from "sonner";
 
 const MAX_MESSAGE_LENGTH = 160;
+const TYPING_IDLE_MS = 1300;
 
 const uploadImageViaApi = async (file: File): Promise<string> => {
   const formData = new FormData();
@@ -34,8 +35,58 @@ export default function ChatInput({
   const [sending, setSending] = useState(false);
   const [imageMode, setImageMode] = useState<"normal" | "once">("normal");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const typingRef = useRef(false);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canSend = useMemo(() => Boolean(user && !user.isAdmin), [user]);
+
+  const publishTyping = (typing: boolean) => {
+    void fetch("/api/realtime/typing", {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId, typing }),
+    }).catch(() => undefined);
+  };
+
+  const stopTyping = () => {
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+
+    if (typingRef.current) {
+      typingRef.current = false;
+      publishTyping(false);
+    }
+  };
+
+  const handleTextChange = (value: string) => {
+    setText(value);
+
+    if (!value.trim()) {
+      stopTyping();
+      return;
+    }
+
+    if (!typingRef.current) {
+      typingRef.current = true;
+      publishTyping(true);
+    }
+
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(stopTyping, TYPING_IDLE_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (typingRef.current) {
+        typingRef.current = false;
+        publishTyping(false);
+      }
+    };
+  }, [roomId]);
 
   const replacePreview = (nextPreview: string | null) => {
     setPreview((current) => {
@@ -70,6 +121,7 @@ export default function ChatInput({
     event.preventDefault();
     if (!user || !canSend || (!text.trim() && !file) || sending) return;
 
+    stopTyping();
     setSending(true);
     const clientMessageId = crypto.randomUUID();
     const outgoingText = text.trim();
@@ -194,7 +246,7 @@ export default function ChatInput({
           <input
             value={text}
             maxLength={MAX_MESSAGE_LENGTH}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => handleTextChange(event.target.value)}
             placeholder={file ? "Thêm ghi chú..." : "Nhập tin nhắn..."}
             className="flex-1 bg-transparent border-none outline-none focus:ring-0 py-2 text-base placeholder:text-muted-foreground/40"
           />
