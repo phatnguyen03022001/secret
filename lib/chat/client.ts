@@ -1,6 +1,6 @@
 "use client";
 
-import type { UploadedChatMedia } from "@/lib/media/client";
+import type { ChatMediaPayload } from "@/lib/media/client";
 
 export interface ReplyPreview {
   messageId: string;
@@ -14,7 +14,7 @@ export interface MessageSendPayload {
   roomId: string;
   text: string;
   imageUrl?: string | null;
-  media?: UploadedChatMedia | null;
+  media?: ChatMediaPayload | null;
   imageMode: "normal" | "once";
   clientMessageId: string;
   replyToId?: string | null;
