@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDB, pusherServer } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import {
-  findConversationByExternalId,
   getConversationLastMessageSnapshot,
   getConversationMemberIds,
   getConversationMessageRoomIds,
   getMessagePreview,
+  resolveConversationForUser,
 } from "@/lib/chat/conversations";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import Conversation from "@/models/Conversation";
@@ -27,7 +28,7 @@ const editSchema = z.object({
 
 function getReplyContent(message: any) {
   if (message.imageMode === "once") return "Ảnh xem một lần";
-  if (message.imageUrl) return message.text?.trim() || "Ảnh";
+  if (message.imageUrl || message.media?.publicId) return message.text?.trim() || "Ảnh";
   return message.text?.trim() || "Tin nhắn";
 }
 
@@ -83,8 +84,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const conversation = await resolveConversationForUser(
+    message.conversationId?.toString() || message.roomId,
+    user,
+    { allowAdminGodView: false },
+  );
+  if (!conversation) {
+    return NextResponse.json({ error: "Conversation unavailable" }, { status: 403 });
+  }
+
+  const userId = user._id.toString();
+  const peerId = getConversationMemberIds(conversation).find((memberId) => memberId !== userId);
+  if (peerId && (await isBlockedBetween(userId, peerId))) {
+    return NextResponse.json({ error: "Không thể chỉnh sửa trong cuộc trò chuyện này" }, { status: 403 });
+  }
+
   const nextText = parsed.data.text.trim();
-  if (!nextText && !message.imageUrl) {
+  if (!nextText && !message.imageUrl && !message.media?.publicId) {
     return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
   }
 
@@ -124,8 +140,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     );
   }
 
-  const conversation = await findConversationByExternalId(updated.conversationId?.toString() || updated.roomId);
-  const realtimeRoomId = conversation?._id.toString() || updated.roomId;
+  const realtimeRoomId = conversation._id.toString();
   const updateEvent = {
     messageId: updated._id.toString(),
     text: updated.text,
@@ -135,7 +150,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   await pusherServer.trigger(conversationChannel(realtimeRoomId), "message-updated", updateEvent);
 
-  if (conversation && conversation.lastMessage?.messageId?.toString() === updated._id.toString()) {
+  if (conversation.lastMessage?.messageId?.toString() === updated._id.toString()) {
     const lastMessage = getConversationLastMessageSnapshot(updated);
     await Conversation.updateOne({ _id: conversation._id }, { $set: { lastMessage } });
 
@@ -158,7 +173,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json(updateEvent);
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await connectDB();
 
   const user = await getCurrentUser();
@@ -178,14 +193,26 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ error: "Message not found" }, { status: 404 });
   }
 
+  const conversation = await resolveConversationForUser(
+    message.conversationId?.toString() || message.roomId,
+    user,
+    { allowAdminGodView: true },
+  );
+  if (!conversation) {
+    return NextResponse.json({ error: "Conversation unavailable" }, { status: 404 });
+  }
+
   const userId = user._id.toString();
   const isOwner = message.userId.toString() === userId;
   if (!isOwner && !user.isAdmin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const conversation = await findConversationByExternalId(message.conversationId?.toString() || message.roomId);
-  const realtimeRoomId = conversation?._id.toString() || message.roomId;
+  if (message.deleted) {
+    return NextResponse.json({ success: true, alreadyDeleted: true });
+  }
+
+  const realtimeRoomId = conversation._id.toString();
 
   message.deleted = true;
   message.deletedAt = new Date();
@@ -195,7 +222,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     messageId: message._id.toString(),
   });
 
-  if (conversation && conversation.lastMessage?.messageId?.toString() === id) {
+  if (conversation.lastMessage?.messageId?.toString() === id) {
     const roomIds = getConversationMessageRoomIds(conversation);
     const newLastMessage = await Message.findOne({
       _id: { $ne: message._id },
