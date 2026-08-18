@@ -148,6 +148,14 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
+    const handleReactions = (data: { messageId: string; reactions: any[] }) => {
+      setMessages((previous) =>
+        previous.map((message) =>
+          message._id === data.messageId ? { ...message, reactions: data.reactions || [] } : message,
+        ),
+      );
+    };
+
     const handleTypingChanged = (data: { userId: string; displayName: string; typing: boolean }) => {
       if (data.userId === userId) return;
 
@@ -169,6 +177,7 @@ export function useChat(currentUser: any, roomId: string) {
     channel.bind("new-message", handleNewMessage);
     channel.bind("message-deleted", handleMessageDeleted);
     channel.bind("messages-seen", handleMessagesSeen);
+    channel.bind("message-reactions", handleReactions);
     channel.bind("typing-changed", handleTypingChanged);
 
     return () => {
