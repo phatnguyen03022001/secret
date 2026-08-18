@@ -44,6 +44,7 @@ interface Message {
   username?: string;
   text?: string;
   imageUrl?: string | null;
+  media?: { publicId?: string; deliveryType?: "upload" | "authenticated" } | null;
   imageMode?: "normal" | "once";
   onceViewedBy?: string[];
   onceAvailable?: boolean;
@@ -55,6 +56,7 @@ interface Message {
   seenBy?: string[];
   createdAt: string;
   deliveryState?: "sending" | "sent" | "failed";
+  receiptState?: "sent" | "delivered" | "seen";
   deliveryError?: string;
   retryPayload?: MessageSendPayload;
 }
@@ -85,19 +87,22 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const isOnceImage = message.imageMode === "once";
-  const hasBeenSeen = !message.deleted && (message.seenBy?.length ?? 0) > 0;
   const isLocalMessage = message._id.startsWith("local-");
   const deliveryFailed = message.deliveryState === "failed";
   const deliveryPending = message.deliveryState === "sending" || retrying;
+  const receiptState = message.receiptState || ((message.seenBy?.length ?? 0) > 0 ? "seen" : "sent");
+  const hasBeenSeen = !message.deleted && receiptState === "seen";
+  const hasBeenDelivered = hasBeenSeen || receiptState === "delivered";
   const canDelete = isMe && !currentUser.isAdmin && !isLocalMessage && !deliveryFailed;
   const canEdit = isMe && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed;
   const canReply = Boolean(onReply && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed);
   const canReact = !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed;
   const canViewDirectly = isMe || currentUser.isAdmin;
   const alreadyViewed =
-    message.onceViewed === true ||
-    (!canViewDirectly && (message.onceViewedBy?.includes(currentUser._id) ?? false)) ||
-    (!canViewDirectly && message.onceAvailable === false);
+    !canViewDirectly &&
+    (message.onceViewed === true ||
+      (message.onceViewedBy?.includes(currentUser._id) ?? false) ||
+      message.onceAvailable === false);
   const displayImageUrl = resolvedOnceUrl || message.imageUrl || null;
 
   const reactionGroups = (message.reactions || []).reduce<Record<string, { count: number; reactedByMe: boolean }>>(
@@ -120,6 +125,8 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
 
   const markOnceExpiredLocally = () => {
     setResolvedOnceUrl(null);
+    if (canViewDirectly) return;
+
     setMessages((prev) =>
       prev.map((item) =>
         item._id === message._id
@@ -135,13 +142,20 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
     );
   };
 
-  const makeReplyTarget = (): ReplyPreview => ({
-    messageId: message._id,
-    senderId: message.userId,
-    senderName: message.username || (isMe ? "Bạn" : "Spackie user"),
-    type: isOnceImage || message.imageUrl ? "image" : "text",
-    content: isOnceImage ? "Ảnh xem một lần" : message.imageUrl ? message.text?.trim() || "Ảnh" : message.text?.trim() || "Tin nhắn",
-  });
+  const makeReplyTarget = (): ReplyPreview => {
+    const hasImage = isOnceImage || Boolean(message.imageUrl || message.media?.publicId);
+    return {
+      messageId: message._id,
+      senderId: message.userId,
+      senderName: message.username || (isMe ? "Bạn" : "Spackie user"),
+      type: hasImage ? "image" : "text",
+      content: isOnceImage
+        ? "Ảnh xem một lần"
+        : hasImage
+          ? message.text?.trim() || "Ảnh"
+          : message.text?.trim() || "Tin nhắn",
+    };
+  };
 
   useEffect(() => {
     if (!editing) setEditText(message.text || "");
@@ -154,7 +168,8 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   const handleSaveEdit = async () => {
     if (!canEdit || savingEdit) return;
     const nextText = editText.trim();
-    if (!nextText && !message.imageUrl) {
+    const hasMedia = Boolean(message.imageUrl || message.media?.publicId || isOnceImage);
+    if (!nextText && !hasMedia) {
       setEditError("Tin nhắn không thể để trống");
       return;
     }
@@ -228,7 +243,13 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
       setMessages((previous) =>
         previous.map((item) =>
           item.clientMessageId === message.clientMessageId
-            ? { ...serverMessage, deliveryState: "sent", retryPayload: undefined, deliveryError: undefined }
+            ? {
+                ...serverMessage,
+                deliveryState: "sent",
+                receiptState: serverMessage.receiptState || "sent",
+                retryPayload: undefined,
+                deliveryError: undefined,
+              }
             : item,
         ),
       );
@@ -256,7 +277,7 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
 
     setOpeningOnce(true);
     try {
-      const response = await fetch(`/api/messages/${message._id}/once-viewed`, { method: "POST" });
+      const response = await fetch(`/api/messages/${message._id}/once-viewed`, { method: "POST", cache: "no-store" });
       if (!response.ok) {
         markOnceExpiredLocally();
         return;
@@ -270,18 +291,20 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
 
       setResolvedOnceUrl(data.imageUrl);
       setShowFullImage(true);
-      setTimeLeft(5);
+      setTimeLeft(canViewDirectly ? null : 5);
 
-      intervalRef.current = setInterval(() => {
-        setTimeLeft((previous) => (previous && previous > 1 ? previous - 1 : 0));
-      }, 1000);
+      if (!canViewDirectly) {
+        intervalRef.current = setInterval(() => {
+          setTimeLeft((previous) => (previous && previous > 1 ? previous - 1 : 0));
+        }, 1000);
 
-      timerRef.current = setTimeout(() => {
-        clearTimers();
-        setShowFullImage(false);
-        setTimeLeft(null);
-        markOnceExpiredLocally();
-      }, 5000);
+        timerRef.current = setTimeout(() => {
+          clearTimers();
+          setShowFullImage(false);
+          setTimeLeft(null);
+          markOnceExpiredLocally();
+        }, 5000);
+      }
     } catch {
       markOnceExpiredLocally();
     } finally {
@@ -296,6 +319,8 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
 
     if (isOnceImage && !canViewDirectly && resolvedOnceUrl) {
       markOnceExpiredLocally();
+    } else if (canViewDirectly) {
+      setResolvedOnceUrl(null);
     }
   };
 
@@ -305,7 +330,11 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
     try {
       const response = await fetch(`/api/messages/${message._id}`, { method: "DELETE" });
       if (!response.ok) throw new Error();
-      setMessages((prev) => prev.map((item) => (item._id === message._id ? { ...item, deleted: true } : item)));
+      setMessages((prev) =>
+        prev.map((item) =>
+          item._id === message._id ? { ...item, deleted: true, imageUrl: null, onceAvailable: false } : item,
+        ),
+      );
     } catch {
       console.error("Failed to revoke message");
     } finally {
@@ -392,14 +421,19 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
               <ShieldAlert className="w-3.5 h-3.5" /> Log: Revoked
             </div>
             {message.text && <p className="text-sm text-muted-foreground italic leading-relaxed">{message.text}</p>}
-            {message.imageUrl && (
+            {message.imageUrl ? (
               <div className="relative w-24 h-16 rounded-md border border-destructive/20 grayscale opacity-40 overflow-hidden">
-                <Image src={message.imageUrl} alt="Deleted" fill className="object-cover" />
+                <Image src={message.imageUrl} alt="Deleted" fill className="object-cover" unoptimized />
                 <div className="absolute inset-0 flex items-center justify-center bg-background/20">
                   <Lock className="w-3 h-3 text-muted-foreground" />
                 </div>
               </div>
-            )}
+            ) : isOnceImage && message.media ? (
+              <Button variant="outline" size="sm" onClick={handleViewOnceImage} disabled={openingOnce} className="h-7 text-[10px] gap-1.5">
+                {openingOnce ? <Loader2 className="h-3 w-3 animate-spin" /> : <Lock className="h-3 w-3" />}
+                Kiểm tra media nội bộ
+              </Button>
+            ) : null}
           </div>
         );
       }
@@ -495,13 +529,15 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
               </span>
               {message.editedAt && !message.deleted && <span className="text-[9px]">đã sửa</span>}
               {isMe && !message.deleted && (
-                <div className="flex items-center">
+                <div className="flex items-center" aria-label={`Trạng thái: ${receiptState}`}>
                   {deliveryPending ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : deliveryFailed ? null : hasBeenSeen ? (
-                    <CheckCheck className="w-3 h-3 stroke-[2.5px]" />
+                    <CheckCheck className="w-3 h-3 stroke-[2.5px] opacity-100" aria-label="Đã xem" />
+                  ) : hasBeenDelivered ? (
+                    <CheckCheck className="w-3 h-3 stroke-[2.5px] opacity-70" aria-label="Đã nhận" />
                   ) : (
-                    <Check className="w-3 h-3 stroke-[2.5px]" />
+                    <Check className="w-3 h-3 stroke-[2.5px]" aria-label="Đã gửi" />
                   )}
                 </div>
               )}
