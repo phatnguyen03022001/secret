@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { getPusherClient } from "@/lib/client";
 import { userChannel } from "@/lib/realtime/channels";
-import { MessageSquare, Loader2, User as UserIcon, Layers } from "lucide-react";
+import { Clock3, MessageSquare, Loader2, User as UserIcon, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -18,6 +18,8 @@ interface User {
 interface Room {
   roomId: string;
   conversationId?: string;
+  lifecycle?: "persistent" | "quick" | "temporary";
+  expiresAt?: string | null;
   otherUser: User;
   lastMessage?: {
     content: string;
@@ -128,12 +130,19 @@ export function ConversationList({
       );
     };
 
+    const handleConversationRemoved = (data: { conversationId: string; roomId?: string }) => {
+      const id = data.conversationId || data.roomId;
+      setRooms((previous) => previous.filter((room) => room.roomId !== id));
+    };
+
     channel.bind("rooms-updated", handleRoomsUpdate);
     channel.bind("unread-updated", handleUnreadUpdate);
+    channel.bind("conversation-removed", handleConversationRemoved);
 
     return () => {
       channel.unbind("rooms-updated", handleRoomsUpdate);
       channel.unbind("unread-updated", handleUnreadUpdate);
+      channel.unbind("conversation-removed", handleConversationRemoved);
       pusher.unsubscribe(channelName);
     };
   }, [currentUserId, fetchRooms, selectedRoomId]);
@@ -209,6 +218,9 @@ export function ConversationList({
                           <span className={cn("text-[8px] uppercase tracking-wide opacity-60", isActive && "text-primary-foreground")}>
                             Guest
                           </span>
+                        )}
+                        {room.lifecycle && room.lifecycle !== "persistent" && (
+                          <Clock3 className={cn("h-3 w-3 opacity-60", isActive && "text-primary-foreground")} />
                         )}
                         {unread > 0 && (
                           <span
