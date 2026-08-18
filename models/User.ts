@@ -4,7 +4,9 @@ import mongoose, { Schema, model, models } from "mongoose";
 const UserSchema = new Schema(
   {
     username: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
+    displayName: { type: String, default: null },
+    password: { type: String, default: null },
+    accountType: { type: String, enum: ["registered", "guest"], default: "registered", index: true },
     isAdmin: { type: Boolean, default: false },
     lastActive: { type: Date, default: Date.now },
     chatSchemaVersion: { type: Number, default: 0 },
