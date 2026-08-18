@@ -22,15 +22,57 @@ const sendMessageSchema = z.object({
   imageUrl: z.string().url().nullable().optional(),
   imageMode: z.enum(["normal", "once"]).optional().default("normal"),
   clientMessageId: z.string().min(8).max(120).optional(),
+  replyToId: z
+    .string()
+    .refine((value) => mongoose.Types.ObjectId.isValid(value), "Invalid reply target")
+    .nullable()
+    .optional(),
 });
 
-function sanitizeMessageForRealtime(message: any) {
+function buildReplyPreview(message: any) {
+  if (!message) return null;
+
+  const base = {
+    messageId: message._id.toString(),
+    senderId: message.userId?.toString(),
+    senderName: message.username || "Spackie user",
+  };
+
+  if (message.deleted) {
+    return { ...base, type: "deleted", content: "Tin nhắn đã bị gỡ" };
+  }
+
+  if (message.imageMode === "once") {
+    return { ...base, type: "image", content: "Ảnh xem một lần" };
+  }
+
+  if (message.imageUrl) {
+    return { ...base, type: "image", content: message.text?.trim() || "Ảnh" };
+  }
+
+  return {
+    ...base,
+    type: "text",
+    content: (message.text || "Tin nhắn").trim().slice(0, 160),
+  };
+}
+
+function sanitizeMessageForRealtime(message: any, replyPreview?: ReturnType<typeof buildReplyPreview>) {
   const payload = typeof message.toObject === "function" ? message.toObject() : { ...message };
   if (payload.imageMode === "once") {
     payload.imageUrl = null;
     payload.onceAvailable = true;
   }
+  if (replyPreview) payload.replyPreview = replyPreview;
   return payload;
+}
+
+async function getReplyPreviewForMessage(message: any) {
+  if (!message?.replyTo) return null;
+  const replyTarget = await Message.findById(message.replyTo)
+    .select("_id userId username text imageUrl imageMode deleted")
+    .lean();
+  return buildReplyPreview(replyTarget);
 }
 
 export async function GET(req: NextRequest) {
@@ -65,11 +107,28 @@ export async function GET(req: NextRequest) {
   }
 
   const messages = await Message.find(queryFilter).sort({ createdAt: -1 }).limit(limit).lean().exec();
+  const replyIds = [
+    ...new Set(
+      messages
+        .map((message: any) => message.replyTo?.toString())
+        .filter((value: string | undefined): value is string => Boolean(value)),
+    ),
+  ];
+  const replyTargets = replyIds.length
+    ? await Message.find({ _id: { $in: replyIds } })
+        .select("_id userId username text imageUrl imageMode deleted")
+        .lean()
+    : [];
+  const replyMap = new Map(replyTargets.map((message: any) => [message._id.toString(), message]));
   const viewerId = viewer._id.toString();
 
   const processed = messages.map((message: any) => {
     const item = { ...message };
     const isSender = item.userId?.toString() === viewerId;
+
+    if (item.replyTo) {
+      item.replyPreview = buildReplyPreview(replyMap.get(item.replyTo.toString()));
+    }
 
     if (item.deleted) {
       item.isDeleted = true;
@@ -155,13 +214,31 @@ export async function POST(req: NextRequest) {
   if (clientMessageId) {
     const duplicate = await Message.findOne({ conversationId: conversation._id, userId: user._id, clientMessageId });
     if (duplicate) {
-      return NextResponse.json(sanitizeMessageForRealtime(duplicate), { status: 200 });
+      const duplicateReplyPreview = await getReplyPreviewForMessage(duplicate);
+      return NextResponse.json(sanitizeMessageForRealtime(duplicate, duplicateReplyPreview), { status: 200 });
     }
   }
 
   const conversationId = conversation._id.toString();
+  const roomIds = getConversationMessageRoomIds(conversation);
   const imageMode = imageUrl && parsed.data.imageMode === "once" ? "once" : "normal";
+  let replyTarget: any = null;
 
+  if (parsed.data.replyToId) {
+    replyTarget = await Message.findOne({
+      _id: parsed.data.replyToId,
+      deleted: { $ne: true },
+      $or: [{ conversationId: conversation._id }, { roomId: { $in: roomIds } }],
+    })
+      .select("_id userId username text imageUrl imageMode deleted")
+      .lean();
+
+    if (!replyTarget) {
+      return NextResponse.json({ error: "Tin nhắn được trả lời không còn khả dụng" }, { status: 400 });
+    }
+  }
+
+  const replyPreview = buildReplyPreview(replyTarget);
   let message;
   try {
     message = await Message.create({
@@ -171,15 +248,18 @@ export async function POST(req: NextRequest) {
       type: imageUrl ? "image" : "text",
       userId: user._id,
       username: user.displayName || user.username,
-      isAdmin: user.isAdmin || false,
       text,
       imageUrl,
       imageMode,
+      replyTo: replyTarget?._id ?? null,
     });
   } catch (error: any) {
     if (error?.code === 11000 && clientMessageId) {
       const duplicate = await Message.findOne({ conversationId: conversation._id, userId: user._id, clientMessageId });
-      if (duplicate) return NextResponse.json(sanitizeMessageForRealtime(duplicate), { status: 200 });
+      if (duplicate) {
+        const duplicateReplyPreview = await getReplyPreviewForMessage(duplicate);
+        return NextResponse.json(sanitizeMessageForRealtime(duplicate, duplicateReplyPreview), { status: 200 });
+      }
     }
     throw error;
   }
@@ -203,10 +283,10 @@ export async function POST(req: NextRequest) {
 
   const memberIds = getConversationMemberIds(conversation);
   const members = await User.find({ _id: { $in: memberIds } })
-    .select("username displayName accountType isAdmin")
+    .select("username displayName accountType isAdmin lastActive")
     .lean();
   const membersMap = new Map(members.map((member: any) => [member._id.toString(), member]));
-  const realtimeMessage = sanitizeMessageForRealtime(message);
+  const realtimeMessage = sanitizeMessageForRealtime(message, replyPreview);
 
   await pusherServer.trigger(conversationChannel(conversationId), "new-message", realtimeMessage);
 
@@ -229,6 +309,7 @@ export async function POST(req: NextRequest) {
             displayName: otherMember.displayName || otherMember.username,
             accountType: otherMember.accountType || "registered",
             isAdmin: otherMember.isAdmin,
+            lastActive: otherMember.lastActive ?? null,
           }
         : undefined,
     });
