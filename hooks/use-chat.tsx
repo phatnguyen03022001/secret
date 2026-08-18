@@ -135,6 +135,23 @@ export function useChat(currentUser: any, roomId: string) {
       );
     };
 
+    const handleMessageUpdated = (data: {
+      messageId: string;
+      text: string;
+      editedAt: string;
+      replyContent: string;
+    }) => {
+      setMessages((previous) =>
+        previous.map((message) => {
+          const next = message._id === data.messageId ? { ...message, text: data.text, editedAt: data.editedAt } : { ...message };
+          if (next.replyPreview?.messageId === data.messageId) {
+            next.replyPreview = { ...next.replyPreview, content: data.replyContent };
+          }
+          return next;
+        }),
+      );
+    };
+
     const handleMessagesSeen = (data: { userId: string; isAdmin: boolean }) => {
       if (data.isAdmin) return;
 
@@ -176,6 +193,7 @@ export function useChat(currentUser: any, roomId: string) {
 
     channel.bind("new-message", handleNewMessage);
     channel.bind("message-deleted", handleMessageDeleted);
+    channel.bind("message-updated", handleMessageUpdated);
     channel.bind("messages-seen", handleMessagesSeen);
     channel.bind("message-reactions", handleReactions);
     channel.bind("typing-changed", handleTypingChanged);
