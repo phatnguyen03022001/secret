@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import { createCloudinaryUploadSignature } from "@/lib/server";
+import MediaUpload from "@/models/MediaUpload";
 import { z } from "zod";
 
 const signSchema = z.object({
@@ -38,6 +39,13 @@ export async function POST(req: NextRequest) {
 
   const deliveryType = parsed.data.mode === "once" ? "authenticated" : "upload";
   const signed = createCloudinaryUploadSignature(user._id.toString(), deliveryType);
+
+  await MediaUpload.create({
+    userId: user._id,
+    publicId: signed.publicId,
+    deliveryType,
+    cleanupAfter: new Date(Date.now() + 60 * 60 * 1000),
+  });
 
   return NextResponse.json({
     ...signed,
