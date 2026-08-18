@@ -8,6 +8,7 @@ import {
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
 import { isManagedCloudinaryImageUrl } from "@/lib/media/cloudinary";
+import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
 import Conversation from "@/models/Conversation";
@@ -198,6 +199,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Không có quyền gửi vào cuộc trò chuyện này" }, { status: 403 });
   }
 
+  const conversationId = conversation._id.toString();
+  const memberIds = getConversationMemberIds(conversation);
+  const userId = user._id.toString();
+  const peerId = memberIds.find((memberId) => memberId !== userId);
+
+  if (!user.isAdmin && peerId && (await isBlockedBetween(userId, peerId))) {
+    return NextResponse.json({ error: "Không thể gửi tin nhắn trong cuộc trò chuyện này" }, { status: 403 });
+  }
+
   const text = parsed.data.text.trim();
   const imageUrl = parsed.data.imageUrl ?? null;
   const clientMessageId = parsed.data.clientMessageId;
@@ -222,7 +232,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const conversationId = conversation._id.toString();
   const roomIds = getConversationMessageRoomIds(conversation);
   const imageMode = imageUrl && parsed.data.imageMode === "once" ? "once" : "normal";
   let replyTarget: any = null;
@@ -284,9 +293,8 @@ export async function POST(req: NextRequest) {
     { arrayFilters: [{ "recipient.userId": { $ne: user._id } }] },
   );
 
-  const memberIds = getConversationMemberIds(conversation);
   const members = await User.find({ _id: { $in: memberIds } })
-    .select("username displayName accountType isAdmin lastActive")
+    .select("username displayName accountType isAdmin lastActive privacy.showLastSeen")
     .lean();
   const membersMap = new Map(members.map((member: any) => [member._id.toString(), member]));
   const realtimeMessage = sanitizeMessageForRealtime(message, replyPreview);
@@ -294,8 +302,10 @@ export async function POST(req: NextRequest) {
   await pusherServer.trigger(conversationChannel(conversationId), "new-message", realtimeMessage);
 
   const userUpdates = memberIds.map((participantId: string) => {
+    const participant = membersMap.get(participantId);
     const otherMemberId = memberIds.find((id: string) => id !== participantId);
     const otherMember = otherMemberId ? membersMap.get(otherMemberId) : null;
+    const canSeeLastSeen = participant?.isAdmin || otherMember?.privacy?.showLastSeen !== false;
 
     return pusherServer.trigger(userChannel(participantId), "rooms-updated", {
       roomId: conversationId,
@@ -312,7 +322,7 @@ export async function POST(req: NextRequest) {
             displayName: otherMember.displayName || otherMember.username,
             accountType: otherMember.accountType || "registered",
             isAdmin: otherMember.isAdmin,
-            lastActive: otherMember.lastActive ?? null,
+            lastActive: canSeeLastSeen ? otherMember.lastActive ?? null : null,
           }
         : undefined,
     });
