@@ -30,13 +30,13 @@ const ConversationSchema = new Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     lifecycle: { type: String, enum: ["persistent", "quick", "temporary"], default: "persistent" },
     expiresAt: { type: Date, default: null },
+    burnRequestedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     lastMessage: { type: LastMessageSchema, default: null },
   },
   { timestamps: true },
 );
 
 ConversationSchema.index({ "members.userId": 1, "lastMessage.createdAt": -1 });
-ConversationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const Conversation = models.Conversation || model("Conversation", ConversationSchema);
 export default Conversation;
