@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       displayName: targetUser.displayName || targetUser.username,
       accountType: targetUser.accountType || "registered",
       isAdmin: targetUser.isAdmin,
+      lastActive: targetUser.lastActive ?? null,
     },
   });
 }
