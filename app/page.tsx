@@ -70,10 +70,16 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!conversationRemoved) return;
+
+    if (isGuest) {
+      void logout();
+      return;
+    }
+
     setSelectedRoomId(null);
     setTargetUser(null);
     if (isMobile) setManualSidebarOpen(true);
-  }, [conversationRemoved, isMobile]);
+  }, [conversationRemoved, isGuest, isMobile, logout]);
 
   useEffect(() => {
     if (authLoading || !user || deepLinkHandledRef.current) return;
