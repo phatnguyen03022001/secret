@@ -1,8 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/server";
+import { connectDB, getCloudinaryProtectedImageUrl } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { findConversationByExternalId } from "@/lib/chat/conversations";
 import Message from "@/models/Message";
+
+function getProtectedMediaUrl(message: any) {
+  if (
+    message.media?.publicId &&
+    message.media?.format &&
+    message.media?.deliveryType === "authenticated"
+  ) {
+    return getCloudinaryProtectedImageUrl(message.media.publicId, message.media.format, {
+      deliveryType: "authenticated",
+      expiresInSeconds: 20,
+    });
+  }
+
+  return message.imageUrl || null;
+}
+
+function mediaResponse(imageUrl: string | null, extra: Record<string, unknown> = {}) {
+  if (!imageUrl) {
+    return NextResponse.json({ error: "Media unavailable" }, { status: 410 });
+  }
+
+  return NextResponse.json(
+    { success: true, imageUrl, ...extra },
+    {
+      headers: {
+        "Cache-Control": "private, no-store, max-age=0",
+        "Referrer-Policy": "no-referrer",
+      },
+    },
+  );
+}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await connectDB();
@@ -33,11 +64,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   if (message.imageMode !== "once") {
-    return NextResponse.json({ success: true, imageUrl: message.imageUrl });
+    return mediaResponse(message.imageUrl || null);
   }
 
   if (user.isAdmin) {
-    return NextResponse.json({ success: true, imageUrl: message.imageUrl, godView: true });
+    return mediaResponse(getProtectedMediaUrl(message), { godView: true });
   }
 
   if (isSender) {
@@ -52,11 +83,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     },
     { $addToSet: { onceViewedBy: user._id } },
     { new: false },
-  ).select("imageUrl");
+  ).select("imageUrl media");
 
   if (!consumed) {
     return NextResponse.json({ error: "Ảnh này đã được xem" }, { status: 409 });
   }
 
-  return NextResponse.json({ success: true, imageUrl: consumed.imageUrl });
+  return mediaResponse(getProtectedMediaUrl(consumed));
 }
