@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadImageToCloudinary } from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
@@ -9,6 +10,20 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const rateLimit = await consumeRateLimit({
+    scope: "upload",
+    identifier: user._id.toString(),
+    limit: 12,
+    windowSeconds: 60,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Bạn đang tải ảnh lên quá nhanh." },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
   }
 
   const formData = await req.formData();
