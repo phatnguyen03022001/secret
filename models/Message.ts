@@ -61,6 +61,10 @@ MessageSchema.index(
   { conversationId: 1, userId: 1, clientMessageId: 1 },
   { unique: true, partialFilterExpression: { clientMessageId: { $exists: true } } },
 );
+MessageSchema.index(
+  { "media.publicId": 1 },
+  { unique: true, partialFilterExpression: { "media.publicId": { $type: "string" } } },
+);
 
 const Message = models.Message || model("Message", MessageSchema);
 export default Message;
