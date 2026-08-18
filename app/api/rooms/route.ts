@@ -66,6 +66,7 @@ export async function GET(req: NextRequest) {
           }
         : undefined;
       const canSeeLastSeen = currentUser.isAdmin || otherUser.privacy?.showLastSeen !== false;
+      const peerAlias = otherMember.alias?.trim() || null;
 
       return {
         roomId: conversationId,
@@ -75,7 +76,9 @@ export async function GET(req: NextRequest) {
         otherUser: {
           _id: otherUser._id,
           username: otherUser.username,
-          displayName: otherUser.displayName || otherUser.username,
+          displayName: peerAlias || otherUser.displayName || otherUser.username,
+          profileDisplayName: otherUser.displayName || otherUser.username,
+          conversationAlias: peerAlias,
           accountType: otherUser.accountType || "registered",
           lastActive: canSeeLastSeen ? otherUser.lastActive ?? null : null,
         },
