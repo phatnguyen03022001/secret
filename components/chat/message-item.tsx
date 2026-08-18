@@ -15,16 +15,25 @@ import {
   Lock,
   RotateCcw,
   Reply,
+  SmilePlus,
 } from "lucide-react";
 import { useState, useEffect, useRef, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageSendPayload, ReplyPreview, sendMessageIdempotently } from "@/lib/chat/client";
 
+const REACTION_OPTIONS = ["👍", "❤️", "😂", "😮", "😢"] as const;
+
 interface User {
   _id: string;
   username: string;
   isAdmin: boolean;
+}
+
+interface Reaction {
+  userId: string;
+  emoji: string;
+  createdAt?: string;
 }
 
 interface Message {
@@ -39,6 +48,7 @@ interface Message {
   onceAvailable?: boolean;
   onceViewed?: boolean;
   replyPreview?: ReplyPreview | null;
+  reactions?: Reaction[];
   deleted?: boolean;
   seenBy?: string[];
   createdAt: string;
@@ -58,6 +68,8 @@ interface Props {
 function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [reacting, setReacting] = useState(false);
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [openingOnce, setOpeningOnce] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
   const [resolvedOnceUrl, setResolvedOnceUrl] = useState<string | null>(null);
@@ -73,12 +85,24 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   const deliveryPending = message.deliveryState === "sending" || retrying;
   const canDelete = isMe && !currentUser.isAdmin && !isLocalMessage && !deliveryFailed;
   const canReply = Boolean(onReply && !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed);
+  const canReact = !currentUser.isAdmin && !message.deleted && !isLocalMessage && !deliveryFailed;
   const canViewDirectly = isMe || currentUser.isAdmin;
   const alreadyViewed =
     message.onceViewed === true ||
     (!canViewDirectly && (message.onceViewedBy?.includes(currentUser._id) ?? false)) ||
     (!canViewDirectly && message.onceAvailable === false);
   const displayImageUrl = resolvedOnceUrl || message.imageUrl || null;
+
+  const reactionGroups = (message.reactions || []).reduce<Record<string, { count: number; reactedByMe: boolean }>>(
+    (groups, reaction) => {
+      const current = groups[reaction.emoji] || { count: 0, reactedByMe: false };
+      current.count += 1;
+      if (reaction.userId?.toString() === currentUser._id) current.reactedByMe = true;
+      groups[reaction.emoji] = current;
+      return groups;
+    },
+    {},
+  );
 
   const clearTimers = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -115,6 +139,30 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   useEffect(() => {
     return () => clearTimers();
   }, []);
+
+  const handleReaction = async (emoji: (typeof REACTION_OPTIONS)[number]) => {
+    if (!canReact || reacting) return;
+    setReacting(true);
+    setShowReactionPicker(false);
+
+    try {
+      const response = await fetch(`/api/messages/${message._id}/reactions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emoji }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Không thể reaction");
+
+      setMessages((previous) =>
+        previous.map((item) => (item._id === message._id ? { ...item, reactions: data.reactions || [] } : item)),
+      );
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setReacting(false);
+    }
+  };
 
   const handleRetry = async () => {
     if (!message.retryPayload || !message.clientMessageId || retrying) return;
@@ -332,49 +380,80 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
   return (
     <>
       <div className={cn("flex group relative w-full mb-3 items-end gap-2", isMe ? "flex-row-reverse" : "flex-row")}>
-        <div
-          className={cn(
-            "relative p-3.5 px-4 transition-all max-w-[85%] sm:max-w-[70%]",
-            isMe
-              ? "bg-primary text-primary-foreground rounded-2xl rounded-br-none shadow-sm"
-              : "bg-muted text-foreground rounded-2xl rounded-bl-none border border-border shadow-sm",
-            message.deleted && "bg-transparent border-dashed border-border/50 shadow-none",
-            deliveryPending && "opacity-70",
-            deliveryFailed && "ring-1 ring-destructive/50 opacity-80",
-          )}>
-          <RenderContent />
+        <div className="relative max-w-[85%] sm:max-w-[70%]">
+          <div
+            className={cn(
+              "relative p-3.5 px-4 transition-all",
+              isMe
+                ? "bg-primary text-primary-foreground rounded-2xl rounded-br-none shadow-sm"
+                : "bg-muted text-foreground rounded-2xl rounded-bl-none border border-border shadow-sm",
+              message.deleted && "bg-transparent border-dashed border-border/50 shadow-none",
+              deliveryPending && "opacity-70",
+              deliveryFailed && "ring-1 ring-destructive/50 opacity-80",
+            )}>
+            <RenderContent />
 
-          <div className={cn("mt-1.5 flex items-center gap-1.5 opacity-60", isMe ? "justify-end" : "justify-start")}>
-            <span className="text-[10px] font-medium tracking-tight">
-              {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-            {isMe && !message.deleted && (
-              <div className="flex items-center">
-                {deliveryPending ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : deliveryFailed ? null : hasBeenSeen ? (
-                  <CheckCheck className="w-3 h-3 stroke-[2.5px]" />
-                ) : (
-                  <Check className="w-3 h-3 stroke-[2.5px]" />
-                )}
-              </div>
+            <div className={cn("mt-1.5 flex items-center gap-1.5 opacity-60", isMe ? "justify-end" : "justify-start")}>
+              <span className="text-[10px] font-medium tracking-tight">
+                {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              {isMe && !message.deleted && (
+                <div className="flex items-center">
+                  {deliveryPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : deliveryFailed ? null : hasBeenSeen ? (
+                    <CheckCheck className="w-3 h-3 stroke-[2.5px]" />
+                  ) : (
+                    <Check className="w-3 h-3 stroke-[2.5px]" />
+                  )}
+                </div>
+              )}
+            </div>
+
+            {isMe && deliveryFailed && message.retryPayload && (
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retrying}
+                className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary-foreground underline underline-offset-2 disabled:opacity-50">
+                <RotateCcw className="h-3 w-3" />
+                {retrying ? "Đang thử lại..." : "Không gửi được · Thử lại"}
+              </button>
             )}
           </div>
 
-          {isMe && deliveryFailed && message.retryPayload && (
-            <button
-              type="button"
-              onClick={handleRetry}
-              disabled={retrying}
-              className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary-foreground underline underline-offset-2 disabled:opacity-50">
-              <RotateCcw className="h-3 w-3" />
-              {retrying ? "Đang thử lại..." : "Không gửi được · Thử lại"}
-            </button>
+          {Object.keys(reactionGroups).length > 0 && !message.deleted && (
+            <div className={cn("mt-1 flex flex-wrap gap-1", isMe ? "justify-end" : "justify-start")}>
+              {Object.entries(reactionGroups).map(([emoji, group]) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  disabled={!canReact || reacting}
+                  onClick={() => handleReaction(emoji as (typeof REACTION_OPTIONS)[number])}
+                  className={cn(
+                    "h-6 min-w-7 px-1.5 rounded-full border bg-background text-[11px] shadow-sm transition-colors",
+                    group.reactedByMe ? "border-primary/50 bg-primary/10" : "border-border/60",
+                  )}>
+                  {emoji}
+                  {group.count > 1 ? <span className="ml-1 text-[9px] text-muted-foreground">{group.count}</span> : null}
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
-        {(canReply || canDelete) && (
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {(canReply || canDelete || canReact) && (
+          <div className="relative flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {canReact && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowReactionPicker((value) => !value)}
+                aria-label="Reaction"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted">
+                {reacting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SmilePlus className="w-3.5 h-3.5" />}
+              </Button>
+            )}
             {canReply && onReply && (
               <Button
                 variant="ghost"
@@ -395,6 +474,25 @@ function MessageItem({ message, isMe, currentUser, setMessages, onReply }: Props
                 className="h-8 w-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10">
                 {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
               </Button>
+            )}
+
+            {showReactionPicker && canReact && (
+              <div
+                className={cn(
+                  "absolute bottom-10 z-20 flex items-center gap-1 rounded-full border border-border bg-background p-1.5 shadow-lg",
+                  isMe ? "right-0" : "left-0",
+                )}>
+                {REACTION_OPTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    disabled={reacting}
+                    onClick={() => handleReaction(emoji)}
+                    className="h-8 w-8 rounded-full text-base hover:bg-muted transition-transform hover:scale-110 disabled:opacity-50">
+                    {emoji}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         )}
