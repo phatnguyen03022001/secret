@@ -7,7 +7,7 @@ const UserSchema = new Schema(
     password: { type: String, required: true },
     isAdmin: { type: Boolean, default: false },
     lastActive: { type: Date, default: Date.now },
-    chatSchemaVersion: { type: Number, default: 2 },
+    chatSchemaVersion: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
