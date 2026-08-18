@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, getCloudinaryPublicImageUrl, pusherServer } from "@/lib/server";
+import {
+  connectDB,
+  getCloudinaryImageMetadata,
+  getCloudinaryPublicImageUrl,
+  pusherServer,
+} from "@/lib/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import {
   getConversationMemberIds,
@@ -7,7 +12,6 @@ import {
   getMessagePreview,
   resolveConversationForUser,
 } from "@/lib/chat/conversations";
-import { isManagedCloudinaryImageUrl } from "@/lib/media/cloudinary";
 import { isBlockedBetween } from "@/lib/privacy/blocks";
 import { adminGlobalChannel, conversationChannel, userChannel } from "@/lib/realtime/channels";
 import { consumeRateLimit } from "@/lib/security/rate-limit";
@@ -18,13 +22,17 @@ import User from "@/models/User";
 import mongoose from "mongoose";
 import { z } from "zod";
 
+const ALLOWED_MEDIA_FORMATS = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 12_000;
+
 const mediaSchema = z.object({
   publicId: z.string().min(10).max(300),
   deliveryType: z.enum(["upload", "authenticated"]),
-  format: z.enum(["jpg", "jpeg", "png", "webp", "gif"]),
-  width: z.number().int().min(1).max(12000),
-  height: z.number().int().min(1).max(12000),
-  bytes: z.number().int().min(1).max(8 * 1024 * 1024),
+  format: z.string().min(1).max(16),
+  width: z.number().int().min(1).max(MAX_IMAGE_DIMENSION),
+  height: z.number().int().min(1).max(MAX_IMAGE_DIMENSION),
+  bytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES),
 });
 
 const sendMessageSchema = z.object({
@@ -185,6 +193,8 @@ export async function GET(req: NextRequest) {
       if (!viewer.isAdmin) {
         item.text = "[Tin nhắn đã bị gỡ]";
         item.imageUrl = null;
+        item.media = null;
+        item.onceAvailable = false;
       }
     }
 
@@ -264,11 +274,11 @@ export async function POST(req: NextRequest) {
   const clientMessageId = parsed.data.clientMessageId;
   const imageMode = parsed.data.imageMode;
 
-  if (legacyImageUrl && media) {
-    return NextResponse.json({ error: "Media payload không hợp lệ" }, { status: 400 });
+  if (legacyImageUrl) {
+    return NextResponse.json({ error: "Media client cũ không còn được hỗ trợ. Hãy tải lại ứng dụng." }, { status: 400 });
   }
 
-  if (!text && !legacyImageUrl && !media) {
+  if (!text && !media) {
     return NextResponse.json({ error: "Nội dung trống" }, { status: 400 });
   }
 
@@ -285,9 +295,20 @@ export async function POST(req: NextRequest) {
   }
 
   let imageUrl: string | null = null;
-  let persistedMedia: typeof media = null;
+  let persistedMedia: {
+    publicId: string;
+    deliveryType: "upload" | "authenticated";
+    format: string;
+    width: number;
+    height: number;
+    bytes: number;
+  } | null = null;
 
   if (media) {
+    if (!clientMessageId) {
+      return NextResponse.json({ error: "Media message cần clientMessageId" }, { status: 400 });
+    }
+
     const expectedPrefix = `chat_images/${userId}/`;
     const expectedDeliveryType = imageMode === "once" ? "authenticated" : "upload";
 
@@ -298,26 +319,53 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Media delivery mode không hợp lệ" }, { status: 400 });
     }
 
-    const pendingUpload = await MediaUpload.exists({
-      userId: user._id,
-      publicId: media.publicId,
-      deliveryType: media.deliveryType,
-      cleanupAfter: { $gt: new Date() },
-    });
-    if (!pendingUpload) {
-      return NextResponse.json({ error: "Media upload không còn hợp lệ" }, { status: 400 });
+    const claimedUpload = await MediaUpload.findOneAndUpdate(
+      {
+        userId: user._id,
+        publicId: media.publicId,
+        deliveryType: media.deliveryType,
+        cleanupAfter: { $gt: new Date() },
+        $or: [
+          { claimedByClientMessageId: null },
+          { claimedByClientMessageId: { $exists: false } },
+          { claimedByClientMessageId: clientMessageId },
+        ],
+      },
+      {
+        $set: {
+          claimedByClientMessageId: clientMessageId,
+          claimedAt: new Date(),
+        },
+      },
+      { new: true },
+    );
+
+    if (!claimedUpload) {
+      return NextResponse.json({ error: "Media upload đã được dùng hoặc không còn hợp lệ" }, { status: 409 });
     }
 
-    persistedMedia = media;
-    imageUrl = imageMode === "normal" ? getCloudinaryPublicImageUrl(media.publicId, media.format) : null;
-  } else if (legacyImageUrl) {
-    if (!isManagedCloudinaryImageUrl(legacyImageUrl)) {
-      return NextResponse.json({ error: "Media URL không thuộc Spackie" }, { status: 400 });
+    let canonicalMedia;
+    try {
+      canonicalMedia = await getCloudinaryImageMetadata(media.publicId, media.deliveryType);
+    } catch {
+      return NextResponse.json({ error: "Media upload chưa hoàn tất hoặc không tồn tại" }, { status: 400 });
     }
-    if (imageMode === "once") {
-      return NextResponse.json({ error: "Ảnh xem một lần cần protected upload" }, { status: 400 });
+
+    if (
+      !ALLOWED_MEDIA_FORMATS.has(canonicalMedia.format) ||
+      canonicalMedia.bytes > MAX_UPLOAD_BYTES ||
+      canonicalMedia.width > MAX_IMAGE_DIMENSION ||
+      canonicalMedia.height > MAX_IMAGE_DIMENSION
+    ) {
+      return NextResponse.json({ error: "Media không đáp ứng giới hạn của Spackie" }, { status: 400 });
     }
-    imageUrl = legacyImageUrl;
+
+    persistedMedia = {
+      publicId: media.publicId,
+      deliveryType: media.deliveryType,
+      ...canonicalMedia,
+    };
+    imageUrl = imageMode === "normal" ? getCloudinaryPublicImageUrl(media.publicId, canonicalMedia.format) : null;
   }
 
   const roomIds = getConversationMessageRoomIds(conversation);
@@ -337,7 +385,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const hasImage = Boolean(imageUrl || persistedMedia);
+  const hasImage = Boolean(persistedMedia);
   const replyPreview = buildReplyPreview(replyTarget);
   let message;
   try {
@@ -363,6 +411,14 @@ export async function POST(req: NextRequest) {
       }
     }
     throw error;
+  }
+
+  if (persistedMedia && clientMessageId) {
+    await MediaUpload.deleteOne({
+      userId: user._id,
+      publicId: persistedMedia.publicId,
+      claimedByClientMessageId: clientMessageId,
+    }).catch(() => undefined);
   }
 
   const messageSnapshot = {
