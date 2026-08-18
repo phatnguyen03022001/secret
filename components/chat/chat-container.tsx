@@ -8,6 +8,7 @@ import ChatInput from "./chat-input";
 import { Loader2, ChevronDown, ChevronLeft, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConversationPresence } from "@/hooks/use-presence";
+import type { ReplyPreview } from "@/lib/chat/client";
 
 interface ChatContainerProps {
   currentUser: {
@@ -59,6 +60,7 @@ export default function ChatContainer({
 }: ChatContainerProps) {
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [replyTarget, setReplyTarget] = useState<ReplyPreview | null>(null);
   const isUserAtBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const lastMessageIdRef = useRef<string | null>(null);
@@ -74,6 +76,10 @@ export default function ChatContainer({
     : peerOnline
       ? "Đang hoạt động"
       : formatLastSeen(targetUser.lastActive);
+
+  useEffect(() => {
+    setReplyTarget(null);
+  }, [roomId]);
 
   useEffect(() => {
     if (!lastMessageId) return;
@@ -217,6 +223,7 @@ export default function ChatContainer({
                   isMe={msg.userId === observedUserId}
                   currentUser={currentUser}
                   setMessages={setMessages}
+                  onReply={!readOnly && !currentUser.isAdmin ? setReplyTarget : undefined}
                 />
               ))
             )}
@@ -240,7 +247,12 @@ export default function ChatContainer({
             {targetIsTyping ? `${targetDisplayName} đang nhập...` : ""}
           </div>
           <div className="px-4 pb-4">
-            <ChatInput roomId={roomId} setMessages={setMessages} />
+            <ChatInput
+              roomId={roomId}
+              setMessages={setMessages}
+              replyTo={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
+            />
           </div>
         </div>
       )}
